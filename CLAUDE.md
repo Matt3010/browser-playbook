@@ -89,6 +89,31 @@ These are the classes of defect this codebase actually produced, so look here fi
 - **Files outlive their rows.** Cascading deletes clear the database and leave the
   volume untouched; artifacts had to be removed explicitly, restricted to the
   artifact root.
+- **`force` bypasses the check, not the cause.** Playwright's `force: true` skips
+  the hit-target test and still aims at the same element, so it does nothing for an
+  input whose state the page's own code owns: the click lands, the state does not
+  move, and the failure reads "did not change its state". Do what a person does —
+  click the controlling label — and keep `force` for covered elements that have no
+  label.
+- **The same decision made twice drifts.** The recorder's tooltip and "selected
+  element" panel computed their proposed selector with a second implementation
+  living inside the injected script, which never learned the rules added later, so
+  the UI promised `getByRole(... '15" € 1.749,00 ...')` while the recorder stored a
+  stable selector. The injected script cannot import, but it can *ask*:
+  `exposeBinding` returns a promise to the page, so the choice is made once by
+  `chooseSelector` and rendered by `formatSelectorAsCode`.
+- **Two paths onto the same page must handle it the same way.** `withOverlayFallback`
+  taught the runner to click a covering label, but `session.interact()` — the
+  endpoint the recorder UI drives the page with — still called `locator.check()`
+  raw, so a covered radio failed with a 500 while the identical step replayed fine.
+  Pointer delivery now lives in `runner/pointer-action.ts` and both use it. A
+  control that can be recorded must be replayable, and the reverse.
+- **A shared image drags its healthcheck along.** `migrate` was given the api image
+  to avoid a second build, and inherited a healthcheck probing port 4000, which
+  nothing serves there. It exits 0 but never turns healthy, so every service
+  waiting on `service_completed_successfully` hangs and the stack never comes up.
+  A one-shot service that reuses a server image must set `healthcheck: disable:
+  true`.
 
 ### Things a test cannot pin down
 

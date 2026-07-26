@@ -369,6 +369,39 @@ ${summary}`
 <p><a class="btn" id="download-hostile-link" href="/elements/download-hostile" download>Scarica file con nome ostile</a></p>
 
 <fieldset>
+  <legend>Radio controllato dal framework</legend>
+  <!--
+    Reproduces what a real storefront does with a component framework: the input
+    does not own its state, so the browser's own toggle is suppressed and only the
+    label's handler changes the selection. Clicking the hidden input directly,
+    even bypassing the overlay check, leaves it unchanged.
+  -->
+  <div class="covered-choice">
+    <input id="ctrl-13" type="radio" name="controlled-size" value="13inch" checked
+           onclick="event.preventDefault()">
+    <label for="ctrl-13" class="covering-label" onclick="selectControlled('13inch')">
+      <span>13" controllato</span>
+    </label>
+  </div>
+  <div class="covered-choice">
+    <input id="ctrl-15" type="radio" name="controlled-size" value="15inch"
+           onclick="event.preventDefault()">
+    <label for="ctrl-15" class="covering-label" onclick="selectControlled('15inch')">
+      <span>15" controllato</span>
+    </label>
+  </div>
+  <p>Scelta controllata: <span id="controlled-result" data-testid="controlled-result">13inch</span></p>
+</fieldset>
+<script>
+  function selectControlled(value) {
+    document.querySelectorAll('input[name="controlled-size"]').forEach(function (input) {
+      input.checked = input.value === value;
+    });
+    document.getElementById("controlled-result").textContent = value;
+  }
+</script>
+
+<fieldset>
   <legend>Elemento che la pagina duplica dopo il click</legend>
   <!--
     Lists that re-render, "add another" controls and infinite scrolls all do this:

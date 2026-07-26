@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   chooseSelector,
   describeSelector,
+  formatSelectorAsCode,
   buildFallback,
   isGeneratedId,
   MAX_TEXTUAL_SELECTOR_LENGTH,
@@ -151,6 +152,15 @@ describe("selectors on real-world markup", () => {
     unique: { role: true, label: true, name: false, id: true }
   };
 
+  it("shows the price-free selector the recorder actually stores", () => {
+    // The recorder UI proposal and the stored selector are the same decision, so
+    // they cannot disagree the way they used to.
+    const sel = chooseSelector(coveredRadio)!;
+    const shown = formatSelectorAsCode(sel);
+    expect(shown).toContain(sel.value ?? "");
+    expect(shown).not.toContain("1.749,00");
+  });
+
   it("refuses a label or accessible name that embeds volatile content", () => {
     const sel = chooseSelector(coveredRadio);
     expect(sel).not.toBeNull();
@@ -268,5 +278,23 @@ describe("describeSelector", () => {
     expect(describeSelector({ strategy: "label", value: "Email", pageId: "main" })).toBe(
       "label=Email"
     );
+  });
+});
+
+describe("formatSelectorAsCode", () => {
+  it("reads as the Playwright call the runner will make", () => {
+    expect(
+      formatSelectorAsCode({ strategy: "role", role: "button", name: "Login", pageId: "main" })
+    ).toBe("getByRole('button', { name: 'Login' })");
+    expect(formatSelectorAsCode({ strategy: "label", value: "Email", pageId: "main" })).toBe(
+      "getByLabel('Email')"
+    );
+    expect(formatSelectorAsCode({ strategy: "testid", value: "submit", pageId: "main" })).toBe(
+      "getByTestId('submit')"
+    );
+    expect(formatSelectorAsCode({ strategy: "id", value: "email", pageId: "main" })).toBe("#email");
+    expect(
+      formatSelectorAsCode({ strategy: "css", value: 'input[name="a"][value="b"]', pageId: "main" })
+    ).toBe('input[name="a"][value="b"]');
   });
 });

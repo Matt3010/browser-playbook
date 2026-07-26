@@ -5,7 +5,10 @@ import { chromium, type BrowserContext, type Page } from "playwright";
 import {
   actionsToSteps,
   actionToStep,
+  chooseSelector,
+  formatSelectorAsCode,
   RecordedActionSchema,
+  type ElementInfo,
   type RecordedAction,
   type Step
 } from "@app/workflow-schema";
@@ -22,6 +25,7 @@ import { recorderBrowserScript } from "../recorder/browser-script";
 import { buildHighlightCss, DEFAULT_RECORDER_COLORS } from "../recorder/highlight-css";
 import { assertSafeLandedUrl, gotoTolerantOfRedirects } from "../runner/navigation";
 import { resolveUnique } from "../runner/locator";
+import { deliverPointerAction } from "../runner/pointer-action";
 
 const TOOLTIP_ID = "__recorder_tooltip__";
 
@@ -230,6 +234,12 @@ export class BrowserSession {
       highlight: this.highlight,
       armedFinal: this.armedFinal
     }));
+    // The tooltip asks Node which selector would be recorded instead of deciding
+    // again in the page: one implementation, so the proposal cannot drift from what
+    // is stored. exposeBinding gives the page a function that returns a promise.
+    await this.context.exposeBinding("__recorderProposeSelector", (_source, info) =>
+      proposeSelector(info as ElementInfo)
+    );
     await this.context.addInitScript(recorderBrowserScript, {
       css: buildHighlightCss(DEFAULT_RECORDER_COLORS, TOOLTIP_ID),
       tooltipId: TOOLTIP_ID
@@ -645,9 +655,22 @@ export class BrowserSession {
     if (!input.selector) throw new Error(`${input.kind} requires a selector`);
     const locator = this.rootFor(page, input.frame).locator(input.selector);
 
+    // Covered controls are delivered exactly as the runner delivers them, so a
+    // control that can be recorded is a control that can be replayed.
+    const deliver = (action: (options: { timeout: number; force?: boolean }) => Promise<void>) =>
+      deliverPointerAction({
+        page,
+        locator,
+        timeoutMs: 15_000,
+        action,
+        onFallback: (message) => {
+          this.log.info({ sessionId: this.sessionId, selector: input.selector }, message);
+        }
+      });
+
     switch (input.kind) {
       case "click":
-        await locator.click({ timeout: 15_000 });
+        await deliver((options) => locator.click(options));
         return;
       case "fill":
         // Focus rather than click: typing already produces the input events the
@@ -660,10 +683,10 @@ export class BrowserSession {
         await locator.selectOption(input.value ?? "", { timeout: 15_000 });
         return;
       case "check":
-        await locator.check({ timeout: 15_000 });
+        await deliver((options) => locator.check(options));
         return;
       case "uncheck":
-        await locator.uncheck({ timeout: 15_000 });
+        await deliver((options) => locator.uncheck(options));
         return;
       default:
         throw new Error(`Unsupported interaction: ${String(input.kind)}`);
@@ -691,11 +714,25 @@ export class BrowserSession {
       : page.mainFrame();
     if (!target) throw new Error(`Frame '${options.frame}' is not present`);
 
-    return target.evaluate((sel) => {
+    const info = await target.evaluate((sel) => {
       const describe = (window as unknown as Record<string, any>).__recorderDescribe;
       return typeof describe === "function" ? describe(sel) : null;
     }, selector);
+    if (!info) return null;
+
+    // Computed here, never in the page, for the same reason as the tooltip.
+    return { ...info, proposedSelector: proposeSelector(info as ElementInfo) };
   }
+}
+
+/**
+ * The selector the recorder would store for an element, rendered for the UI.
+ * Returns a plain sentence rather than a guess when no selector can identify the
+ * element: that is exactly the case where the recorder refuses to record.
+ */
+function proposeSelector(info: ElementInfo): string {
+  const selector = chooseSelector(info);
+  return selector ? formatSelectorAsCode(selector) : "no reliable selector";
 }
 
 function safeUrl(page: Page): string {

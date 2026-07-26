@@ -67,6 +67,11 @@ services:
         condition: service_healthy
     networks: [internal]
     restart: "no"
+    # It reuses the api image, whose healthcheck probes port 4000. Nothing listens
+    # on that port here, so the check can never pass and everything waiting on
+    # `service_completed_successfully` would hang forever.
+    healthcheck:
+      disable: true
 
   api:
     image: browser-automation-test-api:latest

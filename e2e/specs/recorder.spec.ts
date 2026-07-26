@@ -689,6 +689,44 @@ test.describe("verifying a recording as it happens", () => {
     }
   });
 
+  test("proposes the selector it is actually going to record", async () => {
+    // The recorder UI shows a proposed selector for the hovered/selected element.
+    // It used to be computed by a second implementation living inside the injected
+    // script, which never learned the rules added later: on a storefront radio
+    // labelled with a price it proposed getByRole(... '15" Da EUR 1.749,00 ...'),
+    // a selector that breaks at the next price change, while the recorder stored a
+    // stable one. What the interface promises must be what it stores.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+    try {
+      const target = 'input[name="size-choice"][value="15inch"]';
+      const params = new URLSearchParams({ selector: target });
+      const response = await client.request(
+        "GET",
+        `/api/sessions/${session.sessionId}/element?${params.toString()}`
+      );
+      expect(response.status).toBe(200);
+      const proposed = response.json<{ proposedSelector: string }>().proposedSelector;
+
+      expect(proposed, "a price must never reach the proposed selector").not.toMatch(/\d,\d{2}/);
+
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, { kind: "check", selector: target });
+
+      await expect
+        .poll(
+          async () => (await client.getRecording(session.sessionId)).steps.length,
+          { timeout: 20_000 }
+        )
+        .toBeGreaterThan(0);
+
+      const recording = await client.getRecording(session.sessionId);
+      const stored = recording.steps[recording.steps.length - 1]!.selector!;
+      expect(proposed, "the proposal must name the stored selector").toContain(stored.value);
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
   test("does not cry wolf when a click navigates away", async () => {
     // The click that submits the login moves the page before the check can run.
     // Reporting that as a broken step would make the whole feature untrustworthy.

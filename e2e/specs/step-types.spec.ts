@@ -234,9 +234,44 @@ test.describe("step execution", () => {
       `execution failed: ${execution.errorMessage ?? ""}`
     ).toBe("completed");
 
-    // The runner reported that it had to bypass the covering label.
+    // The runner reported which way it delivered the click: on the label, the way a
+    // person would, not forced through to the covered input.
     const messages = (execution.logs ?? []).map((l) => l.message).join("\n");
-    expect(messages).toMatch(/covered by another one/i);
+    expect(messages).toMatch(/covered by its own label; clicking the label instead/i);
+    expect(messages).not.toMatch(/delivering the action to it directly/i);
+  });
+
+  test("selects a radio whose state is owned by the page's own code", async () => {
+    // Found on a real storefront: the input is hidden under its label and the
+    // browser's default toggle is suppressed, so only the label's handler changes
+    // the selection. Bypassing the overlay check and forcing a click on the input
+    // leaves it unchanged and Playwright reports "did not change its state".
+    const workflow = await client.createWorkflow(
+      `Radio controllato ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` }),
+      step({
+        type: "check",
+        name: "Scegli 15 pollici controllato",
+        selector: sel("css", 'input[name="controlled-size"][value="15inch"]')
+      }),
+      step({
+        type: "assertText",
+        name: "Verifica la scelta controllata",
+        value: "15inch",
+        selector: sel("testid", "controlled-result")
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+    expect(
+      execution.status,
+      `execution failed: ${execution.errorMessage ?? ""}`
+    ).toBe("completed");
   });
 
   test("a click step on a covered element still succeeds", async () => {

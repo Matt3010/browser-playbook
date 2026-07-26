@@ -240,3 +240,35 @@ export function describeSelector(sel: Selector): string {
   }
   return `${sel.strategy}=${sel.value}`;
 }
+
+/**
+ * Renders a selector the way it reads as Playwright code, for the recorder's
+ * tooltip and its "selected element" panel.
+ *
+ * This exists so that what the interface proposes is produced by chooseSelector
+ * and nothing else. The injected script used to decide again on its own and drifted
+ * from the real rules, proposing a selector built from a price while the recorder
+ * stored a stable one.
+ */
+export function formatSelectorAsCode(sel: Selector): string {
+  switch (sel.strategy) {
+    case "role":
+      return `getByRole('${sel.role}'${sel.name ? `, { name: '${sel.name}' }` : ""})`;
+    case "label":
+      return `getByLabel('${sel.value}')`;
+    case "placeholder":
+      return `getByPlaceholder('${sel.value}')`;
+    case "text":
+      return `getByText('${sel.value}')`;
+    case "testid":
+      return `getByTestId('${sel.value}')`;
+    case "name":
+      return `[name='${sel.value}']`;
+    case "id":
+      return `#${sel.value}`;
+    case "xpath":
+      return `xpath=${sel.value}`;
+    default:
+      return String(sel.value);
+  }
+}

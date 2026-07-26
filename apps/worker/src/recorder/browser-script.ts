@@ -276,19 +276,26 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
 
   // ---- tooltip ----------------------------------------------------------
 
-  function proposedSelector(info: Record<string, any>): string {
-    const u = info.unique || {};
-    if (info.role && info.accessibleName && u.role) {
-      return `getByRole('${info.role}', { name: '${info.accessibleName}' })`;
-    }
-    if (info.label && u.label) return `getByLabel('${info.label}')`;
-    if (info.placeholder && u.placeholder) return `getByPlaceholder('${info.placeholder}')`;
-    if (info.text && u.text) return `getByText('${info.text}')`;
-    if (info.testId) return `getByTestId('${info.testId}')`;
-    if (info.nameAttr) return `${info.tag}[name='${info.nameAttr}']`;
-    if (info.id) return `#${info.id}`;
-    return info.cssPath || info.xpath || "n/d";
+  /**
+   * Asks Node which selector the recorder would store for this element.
+   *
+   * The decision itself lives in the shared package and is made once. Deciding
+   * again here is precisely the bug this replaces: the in-page copy never learned
+   * the rules added later — volatile prices, length limits, framework-generated
+   * ids, name+value for grouped inputs — so it proposed selectors the recorder
+   * would never store, and the tooltip misdescribed its own recording.
+   */
+  function requestProposedSelector(info: Record<string, any>): Promise<string> {
+    const propose = w.__recorderProposeSelector;
+    if (typeof propose !== "function") return Promise.resolve("n/d");
+    return Promise.resolve(propose(info)).catch(() => "n/d");
   }
+
+  /**
+   * Identifies the newest tooltip render, so a late answer about an element the
+   * pointer has already left is discarded instead of overwriting the current one.
+   */
+  let tooltipToken: object | null = null;
 
   function ensureTooltip(): HTMLElement {
     let tooltip = document.getElementById(TOOLTIP_ID);
@@ -327,10 +334,19 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
       `text: ${info.text ?? "-"}`,
       `id: ${info.id ?? "-"}`,
       `placeholder: ${info.placeholder ?? "-"}`,
-      `selector: ${proposedSelector(info)}`
+      "selector: ..."
     ];
     tooltip.textContent = lines.join("\n");
     tooltip.style.display = "block";
+    // The element description appears at once; the selector line is filled in when
+    // Node answers, provided the pointer has not moved on to something else.
+    const token = {};
+    tooltipToken = token;
+    void requestProposedSelector(info).then((proposed) => {
+      if (tooltipToken !== token || tooltip.style.display === "none") return;
+      lines[lines.length - 1] = `selector: ${proposed}`;
+      tooltip.textContent = lines.join("\n");
+    });
     const rect = tooltip.getBoundingClientRect();
     const left = Math.min(x + 12, Math.max(0, window.innerWidth - rect.width - 8));
     const top = y + 12 + rect.height > window.innerHeight ? Math.max(0, y - rect.height - 12) : y + 12;
@@ -562,7 +578,7 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     const computed = window.getComputedStyle(el);
     return {
       ...info,
-      proposedSelector: proposedSelector(info),
+      // proposedSelector is added by Node, from the shared selector rules.
       outlineColor: computed.outlineColor,
       outlineWidth: computed.outlineWidth,
       outlineStyle: computed.outlineStyle,
