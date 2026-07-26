@@ -230,3 +230,32 @@ describe("closing action placement on unparsed input", () => {
     expect(result.errors.join(" ")).toMatch(/only one closing action/);
   });
 });
+
+describe("placeholders that are not references", () => {
+  // A mistyped reference used to survive validation and be typed into the page as
+  // literal text. Refusing it at save time is the only moment the user is watching.
+  const fill = (value: string) => ({
+    id: "00000000-0000-4000-8000-000000000001",
+    type: "fill",
+    name: "Inserisci la password",
+    pageId: "main",
+    selector: { strategy: "id", value: "password", pageId: "main" },
+    value,
+    timeoutMs: 15000
+  });
+
+  it("refuses a value naming a kind that does not exist", () => {
+    const result = validateSteps([fill("{{secret.password}}")]);
+    expect(result.valid).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/secret\.password/);
+  });
+
+  it("accepts the real reference kinds", () => {
+    expect(validateSteps([fill("{{credentials.password}}")]).valid).toBe(true);
+    expect(validateSteps([fill("{{ variables.email }}")]).valid).toBe(true);
+  });
+
+  it("leaves a plain value alone", () => {
+    expect(validateSteps([fill("TestPassword123!")]).valid).toBe(true);
+  });
+});

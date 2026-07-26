@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { findUnknownPlaceholders } from "@app/shared";
 import { SelectorSchema } from "./selector";
 
 export const STEP_TYPES = [
@@ -80,6 +81,21 @@ export const StepSchema = z
           code: z.ZodIssueCode.custom,
           path: ["value"],
           message: `step type '${step.type}' requires a value`
+        });
+      }
+    }
+    if (step.value) {
+      // renderTemplate only substitutes what it recognises, so a mistyped reference
+      // would be typed into the page verbatim. Refused here, where the user is
+      // still looking at the step.
+      const unknown = findUnknownPlaceholders(step.value);
+      if (unknown.length > 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["value"],
+          message:
+            `${unknown.join(", ")} is not a valid reference: use ` +
+            "{{credentials.name}} for a secret or {{variables.name}} for a value"
         });
       }
     }

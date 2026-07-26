@@ -7,11 +7,17 @@ import {
 } from "@app/database";
 import {
   decryptSecret,
+  findUnknownPlaceholders,
   maskSecrets,
   type Logger,
   type TemplateContext
 } from "@app/shared";
-import { StepSchema, type Step } from "@app/workflow-schema";
+import {
+  describeMissingReferences,
+  findMissingReferences,
+  StepSchema,
+  type Step
+} from "@app/workflow-schema";
 import type { WorkerConfig } from "../config";
 import type { SessionManager } from "../session/manager";
 import type { BrowserSession } from "../session/session";
@@ -159,6 +165,41 @@ export async function runExecution(
     await notifyFailure(notifications, input.userId, workflow.name, "Nessuno step abilitato", log);
     if (input.scheduleId) await settleSchedule(prisma, input.scheduleId, "failed");
     return { status: "failed", errorMessage: "The workflow has no enabled steps" };
+  }
+
+  // The API refuses a run whose templates name a credential that does not exist,
+  // but for a scheduled run that check was made when the schedule was created and
+  // may be days old: the credential can have been renamed or deleted since. Left
+  // unchecked, the run opens a browser, performs every step before the template
+  // and fails there — with whatever those steps did to the target site already
+  // done. Checked here, nothing is touched at all.
+  // Steps saved before placeholders were validated can still hold a mistyped one,
+  // which renderTemplate would pass through and the runner would type into the page.
+  const malformed = steps.flatMap((step) =>
+    (step.value ? findUnknownPlaceholders(step.value) : []).map(
+      (placeholder) => `${placeholder} in '${step.name}'`
+    )
+  );
+  if (malformed.length > 0) {
+    const message = `The workflow contains placeholders that are not references: ${malformed.join(", ")}`;
+    await writeLog("error", message);
+    await finish(prisma, input.executionId, "failed", { errorMessage: message });
+    await notifyFailure(notifications, input.userId, workflow.name, message, log);
+    if (input.scheduleId) await settleSchedule(prisma, input.scheduleId, "failed");
+    return { status: "failed", errorMessage: message };
+  }
+
+  const missing = findMissingReferences(steps, {
+    variables: Object.keys(templates.variables),
+    credentials: Object.keys(templates.credentials)
+  });
+  if (missing.length > 0) {
+    const message = `The workflow references values that do not exist: ${describeMissingReferences(missing)}`;
+    await writeLog("error", message);
+    await finish(prisma, input.executionId, "failed", { errorMessage: message });
+    await notifyFailure(notifications, input.userId, workflow.name, message, log);
+    if (input.scheduleId) await settleSchedule(prisma, input.scheduleId, "failed");
+    return { status: "failed", errorMessage: message };
   }
 
   let session: BrowserSession | null = null;

@@ -37,6 +37,101 @@ async function readyWorkflow(name = "Runnable") {
   return workflow;
 }
 
+describe("refusing to run a workflow that is already running", () => {
+  // This product acts on real sites: a workflow that places an order must not be
+  // able to place it twice because the run button was clicked twice, or because a
+  // schedule came due while a manual run was still in flight. It is the same harm
+  // maxStalledCount: 0 exists to prevent, arriving through a different door.
+  it("refuses a second run while the first is still queued", async () => {
+    const workflow = await readyWorkflow();
+    const first = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/executions`,
+      headers: { cookie: user.cookie }
+    });
+    expect(first.statusCode).toBe(202);
+
+    const second = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/executions`,
+      headers: { cookie: user.cookie }
+    });
+    expect(second.statusCode).toBe(409);
+    expect(second.json<{ error: string }>().error).toMatch(/already/i);
+
+    const rows = await ctx.prisma.execution.findMany({ where: { workflowId: workflow.id } });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("refuses a run while an execution is on the page", async () => {
+    const workflow = await readyWorkflow();
+    for (const status of ["starting", "running"]) {
+      await ctx.prisma.execution.deleteMany({ where: { workflowId: workflow.id } });
+      await ctx.prisma.execution.create({ data: { workflowId: workflow.id, status } });
+      const response = await ctx.app.inject({
+        method: "POST",
+        url: `/api/workflows/${workflow.id}/executions`,
+        headers: { cookie: user.cookie }
+      });
+      expect(response.statusCode, `status ${status} must block a new run`).toBe(409);
+    }
+  });
+
+  it("lets a finished run be repeated", async () => {
+    const workflow = await readyWorkflow();
+    for (const status of ["completed", "failed", "cancelled"]) {
+      await ctx.prisma.execution.deleteMany({ where: { workflowId: workflow.id } });
+      await ctx.prisma.execution.create({
+        data: { workflowId: workflow.id, status, finishedAt: new Date() }
+      });
+      const response = await ctx.app.inject({
+        method: "POST",
+        url: `/api/workflows/${workflow.id}/executions`,
+        headers: { cookie: user.cookie }
+      });
+      expect(response.statusCode, `status ${status} must not block a new run`).toBe(202);
+    }
+  });
+
+  it("does not treat tomorrow's schedule as a run in progress", async () => {
+    // A scheduled run reserves its execution row the moment the schedule is
+    // created. Reading that as "already running" would make a workflow with a
+    // schedule impossible to run by hand until the schedule fired.
+    const workflow = await readyWorkflow();
+    const schedule = await ctx.prisma.schedule.create({
+      data: {
+        workflowId: workflow.id,
+        runAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        timezone: "Europe/Rome",
+        status: "scheduled"
+      }
+    });
+    await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, scheduleId: schedule.id, status: "queued" }
+    });
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/executions`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(202);
+  });
+
+  it("keeps another workflow runnable", async () => {
+    const busy = await readyWorkflow("Busy");
+    const other = await readyWorkflow("Other");
+    await ctx.prisma.execution.create({ data: { workflowId: busy.id, status: "running" } });
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${other.id}/executions`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(202);
+  });
+});
+
 describe("immediate execution and the BullMQ queue", () => {
   it("creates a queued execution and persists the job in Redis", async () => {
     const workflow = await readyWorkflow();

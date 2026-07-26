@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { renderTemplate, extractTemplateRefs, isSecretTemplate } from "./template";
+import {
+  extractTemplateRefs,
+  findUnknownPlaceholders,
+  isSecretTemplate,
+  renderTemplate
+} from "./template";
 
 const ctx = {
   variables: { customerName: "Acme", city: "Roma" },
@@ -44,5 +49,34 @@ describe("variable rendering", () => {
     expect(isSecretTemplate("{{credentials.password}}")).toBe(true);
     expect(isSecretTemplate("{{variables.city}}")).toBe(false);
     expect(isSecretTemplate("literal")).toBe(false);
+  });
+});
+
+describe("findUnknownPlaceholders", () => {
+  // renderTemplate leaves anything it does not recognise alone, so a mistyped
+  // reference is typed into the page verbatim. In a password field that is a failed
+  // login attempt on every run, and enough of them lock the account.
+  it("catches a reference that names a kind that does not exist", () => {
+    expect(findUnknownPlaceholders("{{secret.password}}")).toEqual(["{{secret.password}}"]);
+    expect(findUnknownPlaceholders("{{credential.email}}")).toEqual(["{{credential.email}}"]);
+    expect(findUnknownPlaceholders("{{password}}")).toEqual(["{{password}}"]);
+  });
+
+  it("accepts the two real kinds, with or without spaces", () => {
+    expect(findUnknownPlaceholders("{{credentials.password_apple}}")).toEqual([]);
+    expect(findUnknownPlaceholders("{{ variables.email }}")).toEqual([]);
+    expect(findUnknownPlaceholders("Ciao {{variables.nome}}, entra")).toEqual([]);
+  });
+
+  it("says nothing about text that has no placeholder", () => {
+    expect(findUnknownPlaceholders("https://example.com/login")).toEqual([]);
+    expect(findUnknownPlaceholders("")).toEqual([]);
+    expect(findUnknownPlaceholders('{"json": 1}')).toEqual([]);
+  });
+
+  it("reports every offender, once each", () => {
+    expect(findUnknownPlaceholders("{{secret.a}} e {{secret.a}} e {{credentials.b}}")).toEqual([
+      "{{secret.a}}"
+    ]);
   });
 });

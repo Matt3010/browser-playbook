@@ -112,6 +112,24 @@ These are the classes of defect this codebase actually produced, so look here fi
   raw, so a covered radio failed with a 500 while the identical step replayed fine.
   Pointer delivery now lives in `runner/pointer-action.ts` and both use it. A
   control that can be recorded must be replayable, and the reverse.
+- **Nothing stopped a workflow running twice at once.** Two clicks on the run
+  button, or a schedule coming due during a manual run, created a second execution
+  and the site was acted on twice. The worker's `concurrency: 1` does not help — it
+  serialises them rather than refusing. The route now refuses with 409 when an
+  execution is `queued`/`starting`/`running`, excluding the `queued` row a future
+  schedule reserves when it is created, which otherwise makes a scheduled workflow
+  impossible to run by hand.
+- **A check made when the schedule was created is stale when it fires.** The API
+  refuses a workflow referencing a missing credential, but that was hours or days
+  earlier: the credential can be gone by 3am. The runner re-checks before opening a
+  browser, so nothing is touched at all. Any check whose inputs can change between
+  acceptance and execution has to be repeated at execution.
+- **Anything a renderer does not recognise it passes through.** `renderTemplate`
+  substitutes `{{credentials.x}}` and `{{variables.x}}` and leaves everything else
+  alone, so a mistyped `{{secret.password}}` was typed into the password field as
+  literal text — a failed login every run, and enough of them lock the account.
+  Worse, `value.includes("{{")` was used to *skip* the `goto` URL and `wait`
+  duration checks. `StepSchema` now refuses a placeholder that is not a reference.
 - **A shared image drags its healthcheck along.** `migrate` was given the api image
   to avoid a second build, and inherited a healthcheck probing port 4000, which
   nothing serves there. It exits 0 but never turns healthy, so every service

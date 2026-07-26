@@ -76,6 +76,31 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
+    // A workflow acts on a real site, so running it twice means doing the thing
+    // twice: placing the order again, sending the form again. Two clicks on the run
+    // button are enough to get there, and the worker's concurrency of 1 does not
+    // help — it only makes the second run happen after the first instead of beside
+    // it. The refusal is the same reasoning behind maxStalledCount: 0.
+    const inFlight = await app.prisma.execution.findFirst({
+      where: {
+        workflowId: workflow.id,
+        status: { in: ["queued", "starting", "running"] },
+        // A queued row whose schedule has not come due yet is a reservation made
+        // when the schedule was created, not a run in progress. Treating it as one
+        // would make a scheduled workflow impossible to run by hand.
+        NOT: { status: "queued", schedule: { runAt: { gt: new Date() } } }
+      },
+      select: { id: true, status: true }
+    });
+    if (inFlight) {
+      return reply.code(409).send({
+        error:
+          `This workflow is already running (execution ${inFlight.id}, ${inFlight.status}). ` +
+          "Wait for it to finish or cancel it: running it twice would act on the target site twice.",
+        executionId: inFlight.id
+      });
+    }
+
     const execution = await app.prisma.execution.create({
       data: { workflowId: workflow.id, status: "queued" }
     });
