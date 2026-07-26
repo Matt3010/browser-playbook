@@ -186,6 +186,30 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
       seen.add(step.id);
     }
 
+    // The runner reads the steps when it picks the job up, not when the job is
+    // created, so an edit made in between changes what the queued run does: press
+    // Run, add a step that confirms an order, and the run performs it on the real
+    // site. The run that happens must be the run that was asked for.
+    const inFlight = await app.prisma.execution.findFirst({
+      where: {
+        workflowId: workflow.id,
+        status: { in: ["queued", "starting", "running"] },
+        // A schedule reserves its row when it is created. That is not a run in
+        // progress, and picking up a correction is exactly what tomorrow should do.
+        NOT: { status: "queued", schedule: { runAt: { gt: new Date() } } }
+      },
+      select: { id: true, status: true }
+    });
+    if (inFlight) {
+      return reply.code(409).send({
+        error:
+          `This workflow is running (execution ${inFlight.id}, ${inFlight.status}), so its steps ` +
+          "cannot be changed: the run would perform the new steps instead of the ones it was " +
+          "started with. Wait for it to finish or cancel it.",
+        executionId: inFlight.id
+      });
+    }
+
     await app.prisma.$transaction([
       app.prisma.workflowStep.deleteMany({ where: { workflowId: workflow.id } }),
       app.prisma.workflowStep.createMany({

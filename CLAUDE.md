@@ -175,6 +175,13 @@ These are the classes of defect this codebase actually produced, so look here fi
   defaulting to 0 (off) on purpose: an execution holds a session like a recording
   does, so on a single-user instance a per-user cap below the global one would make
   the owner'"'"'s own scheduled run fail while they record.
+- **The run that happens must be the run that was asked for.** The runner reads the
+  steps when it picks the job up, not when the job is created, so editing a workflow
+  with a queued execution changed what that execution did — add a step that confirms
+  an order and the pending run performs it. `PUT /steps` refuses with 409 while an
+  execution is `queued`/`starting`/`running`, with the same future-schedule exception
+  as the double-run guard: a schedule for tomorrow must still be correctable, and
+  picking up the correction is the point.
 - **A shared image drags its healthcheck along.** `migrate` was given the api image
   to avoid a second build, and inherited a healthcheck probing port 4000, which
   nothing serves there. It exits 0 but never turns healthy, so every service

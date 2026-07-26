@@ -303,3 +303,78 @@ describe("workflow step persistence", () => {
     expect(response.json().steps).toHaveLength(1);
   });
 });
+
+describe("editing a workflow that is about to run", () => {
+  // The runner loads the steps when it picks the job up, not when the job is
+  // created. Editing in between means the run that happens is not the run that was
+  // asked for: press Run, add a "confirm order" step, and the queued job performs it
+  // on the real site. The same reasoning as refusing a second concurrent run.
+  async function workflowWithSteps() {
+    const workflow = await createWorkflow(ctx.app, user.cookie, "Da modificare");
+    await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: { steps: [gotoStep("http://test-web:3001/login"), clickStep("Login")] }
+    });
+    return workflow;
+  }
+
+  const putTwoSteps = (workflowId: string) =>
+    ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflowId}/steps`,
+      headers: { cookie: user.cookie },
+      payload: {
+        steps: [gotoStep("http://test-web:3001/login"), clickStep("Conferma ordine")]
+      }
+    });
+
+  it("refuses while an execution is queued or running", async () => {
+    for (const status of ["queued", "starting", "running"]) {
+      const workflow = await workflowWithSteps();
+      await ctx.prisma.execution.create({ data: { workflowId: workflow.id, status } });
+
+      const response = await putTwoSteps(workflow.id);
+      expect(response.statusCode, `status ${status} must block an edit`).toBe(409);
+
+      // And nothing was written: a half-applied edit would be worse than a refusal.
+      const stored = await ctx.prisma.workflowStep.findMany({
+        where: { workflowId: workflow.id },
+        orderBy: { position: "asc" }
+      });
+      expect(stored.map((s) => s.name)).toEqual(["Vai a http://test-web:3001/login", "Clicca Login"]);
+    }
+  });
+
+  it("allows editing once the run has finished", async () => {
+    const workflow = await workflowWithSteps();
+    await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, status: "completed", finishedAt: new Date() }
+    });
+
+    const response = await putTwoSteps(workflow.id);
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("allows editing a workflow scheduled for later", async () => {
+    // A schedule reserves its execution row when it is created. Reading that as a run
+    // in progress would make a scheduled workflow impossible to correct — and picking
+    // up the correction is exactly what should happen tomorrow.
+    const workflow = await workflowWithSteps();
+    const schedule = await ctx.prisma.schedule.create({
+      data: {
+        workflowId: workflow.id,
+        runAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        timezone: "Europe/Rome",
+        status: "scheduled"
+      }
+    });
+    await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, scheduleId: schedule.id, status: "queued" }
+    });
+
+    const response = await putTwoSteps(workflow.id);
+    expect(response.statusCode).toBe(200);
+  });
+});
