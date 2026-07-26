@@ -204,6 +204,72 @@ test.describe("step execution", () => {
     expect(execution.currentUrl).toContain("/errors");
   });
 
+  test("checks a radio that is hidden underneath its own label", async () => {
+    // Playwright refuses a normal click here because the label intercepts the
+    // pointer; the runner must still be able to select the option.
+    const workflow = await client.createWorkflow(
+      `Radio coperto ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` }),
+      step({
+        type: "check",
+        name: "Scegli 15 pollici",
+        selector: sel("css", 'input[name="size-choice"][value="15inch"]')
+      }),
+      step({
+        type: "assertText",
+        name: "Verifica la scelta",
+        value: "15inch",
+        selector: sel("testid", "size-result")
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+    expect(
+      execution.status,
+      `execution failed: ${execution.errorMessage ?? ""}`
+    ).toBe("completed");
+
+    // The runner reported that it had to bypass the covering label.
+    const messages = (execution.logs ?? []).map((l) => l.message).join("\n");
+    expect(messages).toMatch(/covered by another one/i);
+  });
+
+  test("a click step on a covered element still succeeds", async () => {
+    // Workflows recorded before the recorder learned to emit `check` here store a
+    // `click`; they must keep working.
+    const workflow = await client.createWorkflow(
+      `Click su elemento coperto ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` }),
+      step({
+        type: "click",
+        name: "Clicca 15 pollici",
+        selector: sel("css", 'input[name="size-choice"][value="15inch"]')
+      }),
+      step({
+        type: "assertText",
+        name: "Verifica la scelta",
+        value: "15inch",
+        selector: sel("testid", "size-result")
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+    expect(
+      execution.status,
+      `execution failed: ${execution.errorMessage ?? ""}`
+    ).toBe("completed");
+  });
+
   test("fills a field inside a same-origin iframe", async () => {
     const workflow = await client.createWorkflow(
       `Iframe ${Date.now()}`,

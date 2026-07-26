@@ -89,7 +89,8 @@ export function StepEditor({ steps, onChange }: StepEditorProps) {
         selector: null,
         value: "1000",
         timeoutMs: 10000,
-        enabled: true
+        enabled: true,
+        isFinal: false
       }
     ]);
   }
@@ -105,7 +106,8 @@ export function StepEditor({ steps, onChange }: StepEditorProps) {
         selector: { strategy: "text", value: "", fallback: null, pageId: "main", frame: null },
         value: null,
         timeoutMs: 10000,
-        enabled: true
+        enabled: true,
+        isFinal: false
       }
     ]);
   }
@@ -148,6 +150,15 @@ export function StepEditor({ steps, onChange }: StepEditorProps) {
                     >
                       {step.name}
                     </span>
+                    {step.isFinal ? (
+                      <span
+                        className="badge bg-amber-100 text-amber-800"
+                        title="Registrata senza essere eseguita: viene eseguita solo all'avvio del workflow, e deve restare l'ultimo step"
+                        data-testid={`step-final-${index}`}
+                      >
+                        azione finale
+                      </span>
+                    ) : null}
                   </div>
                   <p className="mt-0.5 truncate text-xs text-slate-500" title={describeSelector(step.selector)}>
                     {describeSelector(step.selector)}

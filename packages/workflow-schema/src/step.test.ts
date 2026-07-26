@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "crypto";
-import { StepSchema, validateStep, validateSteps, isRunnableStepList, type Step } from "./step";
+import {
+  StepSchema,
+  validateStep,
+  validateSteps,
+  validateFinalStepPlacement,
+  findFinalStep,
+  isRunnableStepList,
+  type Step
+} from "./step";
 
 function step(partial: Record<string, unknown>): Record<string, unknown> {
   return {
@@ -120,6 +128,11 @@ describe("step validation", () => {
     expect(validateSteps({}).valid).toBe(false);
   });
 
+  it("defaults isFinal to false", () => {
+    const parsed = StepSchema.parse(step({ type: "goto", value: "https://example.com" }));
+    expect(parsed.isFinal).toBe(false);
+  });
+
   it("treats a list with no enabled step as not runnable", () => {
     const enabled = StepSchema.parse(step({ type: "goto", value: "https://example.com" })) as Step;
     const disabled = StepSchema.parse(
@@ -128,5 +141,50 @@ describe("step validation", () => {
     expect(isRunnableStepList([enabled])).toBe(true);
     expect(isRunnableStepList([disabled])).toBe(false);
     expect(isRunnableStepList([])).toBe(false);
+  });
+});
+
+describe("closing action placement", () => {
+  const goto = () => StepSchema.parse(step({ type: "goto", value: "https://example.com" }));
+  const click = (isFinal = false, enabled = true) =>
+    StepSchema.parse(step({ type: "click", selector: labelSelector, isFinal, enabled }));
+
+  it("accepts a closing action as the last step", () => {
+    const steps = [goto(), click(true)];
+    expect(validateFinalStepPlacement(steps)).toEqual([]);
+    expect(validateSteps(steps).valid).toBe(true);
+  });
+
+  it("accepts a list without any closing action", () => {
+    expect(validateFinalStepPlacement([goto(), click()])).toEqual([]);
+  });
+
+  it("rejects a closing action in the middle of the flow", () => {
+    const steps = [goto(), click(true), click()];
+    const errors = validateFinalStepPlacement(steps);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/must be the last enabled step/);
+    expect(validateSteps(steps).valid).toBe(false);
+  });
+
+  it("rejects more than one closing action", () => {
+    const errors = validateFinalStepPlacement([click(true), click(true)]);
+    expect(errors.join(" ")).toMatch(/only one closing action is allowed/);
+  });
+
+  it("ignores disabled steps when deciding what is last", () => {
+    const steps = [goto(), click(true), click(false, false)];
+    expect(validateFinalStepPlacement(steps)).toEqual([]);
+  });
+
+  it("does not constrain a disabled closing action", () => {
+    const steps = [goto(), click(true, false), click()];
+    expect(validateFinalStepPlacement(steps)).toEqual([]);
+  });
+
+  it("finds the closing action", () => {
+    const final = click(true);
+    expect(findFinalStep([goto(), final])).toBe(final);
+    expect(findFinalStep([goto(), click()])).toBeUndefined();
   });
 });

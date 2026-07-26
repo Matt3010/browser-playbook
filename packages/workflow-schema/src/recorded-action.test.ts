@@ -89,6 +89,51 @@ describe("recorded action to step conversion", () => {
     }
   });
 
+  it("marks a suppressed closing action as final and names it clearly", () => {
+    const result = actionToStep(
+      action({
+        kind: "click",
+        element: { tag: "button", role: "button", accessibleName: "Acquista", unique: { role: true } },
+        isFinal: true
+      }),
+      { newId }
+    );
+    expect(result!.step.isFinal).toBe(true);
+    expect(result!.step.name).toContain("azione finale");
+  });
+
+  it("leaves ordinary actions unmarked", () => {
+    const result = actionToStep(
+      action({
+        kind: "click",
+        element: { tag: "button", role: "button", accessibleName: "Continua", unique: { role: true } }
+      }),
+      { newId }
+    );
+    expect(result!.step.isFinal).toBe(false);
+  });
+
+  it("keeps the value attribute, so a grouped radio stays addressable", () => {
+    // The schema strips undeclared keys, so a missing field here silently
+    // degrades every selector built for a radio group.
+    const result = actionToStep(
+      action({
+        kind: "check",
+        element: {
+          tag: "input",
+          type: "radio",
+          nameAttr: "size-choice",
+          valueAttr: "15inch",
+          unique: { name: false }
+        }
+      }),
+      { newId }
+    );
+    expect(result).not.toBeNull();
+    expect(result!.step.selector!.strategy).toBe("css");
+    expect(result!.step.selector!.value).toBe('input[name="size-choice"][value="15inch"]');
+  });
+
   it("keeps the suggested filename on a download step", () => {
     const result = actionToStep(
       action({ kind: "download", element: emailField, value: "sample.txt" }),

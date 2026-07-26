@@ -9,6 +9,12 @@ const ConfigSchema = z.object({
   credentialsEncKey: z.string().min(16),
   maxSessions: z.coerce.number().int().min(1).default(4),
   sessionTimeoutMs: z.coerce.number().int().default(900_000),
+  /**
+   * A session driven from the UI is closed after this long without any request
+   * touching it, which reclaims the slot when the page is closed or abandoned.
+   * Sessions owned by a running execution are never reaped this way.
+   */
+  sessionIdleTimeoutMs: z.coerce.number().int().min(15_000).default(120_000),
   displayRangeStart: z.coerce.number().int().default(100),
   displayRangeEnd: z.coerce.number().int().default(199),
   vncPortRangeStart: z.coerce.number().int().default(15900),
@@ -35,6 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     credentialsEncKey: env.CREDENTIALS_ENC_KEY,
     maxSessions: env.WORKER_MAX_SESSIONS,
     sessionTimeoutMs: env.BROWSER_SESSION_TIMEOUT_MS,
+    sessionIdleTimeoutMs: env.BROWSER_SESSION_IDLE_TIMEOUT_MS,
     displayRangeStart: env.DISPLAY_RANGE_START,
     displayRangeEnd: env.DISPLAY_RANGE_END,
     vncPortRangeStart: env.VNC_PORT_RANGE_START,

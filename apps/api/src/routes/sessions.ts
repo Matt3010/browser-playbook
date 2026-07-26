@@ -121,6 +121,31 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       }
     });
 
+    /**
+     * Lists the caller's live browser sessions, so an abandoned one can be found
+     * and closed instead of waiting for it to be reclaimed.
+     */
+    scoped.get("/", async (request, reply) => {
+      const { userId } = currentUser(request);
+      try {
+        const all = await app.worker.listSessions();
+        return all
+          .filter((session) => session.userId === userId)
+          .map((session) => ({
+            sessionId: session.sessionId,
+            state: session.state,
+            startUrl: session.startUrl,
+            currentUrl: session.currentUrl,
+            recording: session.recording,
+            idleMs: session.idleMs,
+            expiresAt: session.expiresAt
+          }));
+      } catch (err) {
+        const status = err instanceof WorkerHttpError ? err.statusCode : 503;
+        return reply.code(status).send({ error: (err as Error).message });
+      }
+    });
+
     scoped.get<{ Params: { id: string } }>("/:id", async (request, reply) => {
       const { userId } = currentUser(request);
       try {
@@ -132,6 +157,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
           currentUrl: info.currentUrl ?? null,
           recording: info.recording,
           highlight: info.highlight,
+          armedFinal: info.armedFinal ?? false,
           pages: info.pages ?? [],
           error: info.error ?? null,
           expiresAt: info.expiresAt
@@ -161,6 +187,24 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       try {
         await loadOwnedSession(userId, request.params.id);
         return await app.worker.setRecording(request.params.id, parsed.data.enabled);
+      } catch (err) {
+        const status = err instanceof WorkerHttpError ? err.statusCode : 503;
+        return reply.code(status).send({ error: (err as Error).message });
+      }
+    });
+
+    /**
+     * Arms the capture of a closing action: the next interaction in the page is
+     * recorded and suppressed, so a destructive final step is never performed
+     * while recording.
+     */
+    scoped.post<{ Params: { id: string } }>("/:id/arm-final", async (request, reply) => {
+      const { userId } = currentUser(request);
+      const parsed = ToggleSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
+      try {
+        await loadOwnedSession(userId, request.params.id);
+        return await app.worker.setArmedFinal(request.params.id, parsed.data.enabled);
       } catch (err) {
         const status = err instanceof WorkerHttpError ? err.statusCode : 503;
         return reply.code(status).send({ error: (err as Error).message });

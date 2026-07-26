@@ -9,3 +9,5 @@ e2e/playwright-report/
 *.log
 .DS_Store
 *.tsbuildinfo
+.idea/
+.vscode/

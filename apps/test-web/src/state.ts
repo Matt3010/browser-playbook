@@ -24,6 +24,8 @@ export interface TestState {
   config: TestConfig;
   wizardSubmissions: WizardSubmission[];
   uploads: Array<{ filename: string; size: number; content: string }>;
+  /** Destructive side effect: an order must never be placed while recording. */
+  orders: Array<{ note: string; placedAt: string }>;
   loginAttempts: number;
   /** Partial wizard data between step 1 and step 2, keyed by session id. */
   wizardDrafts: Record<string, { name: string; email: string }>;
@@ -42,6 +44,7 @@ function freshState(): TestState {
     config: { ...DEFAULT_CONFIG },
     wizardSubmissions: [],
     uploads: [],
+    orders: [],
     loginAttempts: 0,
     wizardDrafts: {}
   };

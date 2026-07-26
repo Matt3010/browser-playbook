@@ -72,6 +72,8 @@ export interface Step {
   value: string | null;
   timeoutMs: number;
   enabled: boolean;
+  /** Recorded without being performed; must stay the last enabled step. */
+  isFinal: boolean;
 }
 
 export interface Workflow {
@@ -153,6 +155,7 @@ export interface SessionInfo {
   currentUrl?: string | null;
   recording: boolean;
   highlight: boolean;
+  armedFinal?: boolean;
   pages?: Array<{ pageId: string; url: string; active: boolean }>;
   error?: string | null;
   expiresAt?: string;

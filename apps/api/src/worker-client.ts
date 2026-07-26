@@ -9,6 +9,7 @@ export interface WorkerSessionInfo {
   startUrl: string;
   recording: boolean;
   highlight: boolean;
+  armedFinal?: boolean;
   currentUrl?: string | null;
   pages?: Array<{ pageId: string; url: string; active: boolean }>;
   error?: string | null;
@@ -74,6 +75,21 @@ export class WorkerClient {
     return this.call("POST", "/sessions", input);
   }
 
+  listSessions(): Promise<
+    Array<{
+      sessionId: string;
+      userId: string;
+      state: string;
+      startUrl: string;
+      currentUrl: string | null;
+      recording: boolean;
+      idleMs: number;
+      expiresAt: string;
+    }>
+  > {
+    return this.call("GET", "/sessions");
+  }
+
   getSession(sessionId: string): Promise<WorkerSessionInfo> {
     return this.call("GET", `/sessions/${sessionId}`);
   }
@@ -84,6 +100,10 @@ export class WorkerClient {
 
   setRecording(sessionId: string, enabled: boolean): Promise<WorkerSessionInfo> {
     return this.call("POST", `/sessions/${sessionId}/recording`, { enabled });
+  }
+
+  setArmedFinal(sessionId: string, enabled: boolean): Promise<WorkerSessionInfo> {
+    return this.call("POST", `/sessions/${sessionId}/arm-final`, { enabled });
   }
 
   setHighlight(sessionId: string, enabled: boolean): Promise<WorkerSessionInfo> {

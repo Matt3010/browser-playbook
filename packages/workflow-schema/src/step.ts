@@ -55,7 +55,16 @@ export const StepSchema = z
     selector: SelectorSchema.nullish(),
     value: z.string().nullish(),
     timeoutMs: z.number().int().min(100).max(120000).default(10000),
-    enabled: z.boolean().default(true)
+    enabled: z.boolean().default(true),
+    /**
+     * A closing action that was recorded without being performed: the recorder
+     * captured the interaction and suppressed it, so nothing happened on the site
+     * while recording. It runs only when the workflow runs.
+     *
+     * It must be the last enabled step. Anything after it would depend on the
+     * effect of an action that was never observed during recording.
+     */
+    isFinal: z.boolean().default(false)
   })
   .superRefine((step, ctx) => {
     if (SELECTOR_REQUIRED_TYPES.includes(step.type) && !step.selector) {
@@ -127,7 +136,46 @@ export function validateSteps(input: unknown): StepValidationResult {
       errors.push(...result.errors.map((e) => `steps[${index}].${e}`));
     }
   });
+  if (errors.length === 0) {
+    errors.push(...validateFinalStepPlacement(input as Step[]));
+  }
   return { valid: errors.length === 0, errors };
+}
+
+/**
+ * A closing action recorded without being executed can only sit at the end of the
+ * workflow, and there can be only one: it is the action whose effect nobody
+ * observed while recording, so nothing may depend on it.
+ */
+export function validateFinalStepPlacement(steps: Step[]): string[] {
+  const errors: string[] = [];
+  const finals = steps.filter((s) => s.isFinal);
+  if (finals.length === 0) return errors;
+
+  if (finals.length > 1) {
+    errors.push(
+      `only one closing action is allowed, found ${finals.length}: ` +
+        finals.map((s) => `'${s.name}'`).join(", ")
+    );
+  }
+
+  for (const final of finals) {
+    if (!final.enabled) continue;
+    const index = steps.indexOf(final);
+    const followedBy = steps.slice(index + 1).filter((s) => s.enabled);
+    if (followedBy.length > 0) {
+      errors.push(
+        `the closing action '${final.name}' must be the last enabled step, ` +
+          `but ${followedBy.length} enabled step(s) follow it`
+      );
+    }
+  }
+  return errors;
+}
+
+/** The closing action of a step list, when it has one. */
+export function findFinalStep(steps: Step[]): Step | undefined {
+  return steps.find((s) => s.isFinal);
 }
 
 /** A workflow is runnable only when it has at least one enabled step. */

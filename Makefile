@@ -67,7 +67,7 @@ ps: ## Show the development stack status
 
 test-up: ## Start the test stack, including test-web (http://localhost:8081)
 	$(COMPOSE_TEST) up -d --build
-	@echo "Test stack available on http://localhost:$${PUBLIC_PORT:-8081}"
+	@echo "Test stack available on http://localhost:$${TEST_PUBLIC_PORT:-8081}"
 
 test-down: ## Stop the test stack and remove its volumes
 	$(COMPOSE_TEST) down -v

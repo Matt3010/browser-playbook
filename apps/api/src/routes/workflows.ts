@@ -30,6 +30,7 @@ function rowToStep(row: {
   valueTemplate: string | null;
   timeoutMs: number;
   enabled: boolean;
+  isFinal: boolean;
 }): Step {
   return StepSchema.parse({
     id: row.id,
@@ -39,7 +40,8 @@ function rowToStep(row: {
     selector: row.selectorJson ?? null,
     value: row.valueTemplate,
     timeoutMs: row.timeoutMs,
-    enabled: row.enabled
+    enabled: row.enabled,
+    isFinal: row.isFinal
   });
 }
 
@@ -170,7 +172,8 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
           selectorJson: (step.selector ?? null) as never,
           valueTemplate: step.value ?? null,
           timeoutMs: step.timeoutMs,
-          enabled: step.enabled
+          enabled: step.enabled,
+          isFinal: step.isFinal
         }))
       }),
       app.prisma.workflow.update({

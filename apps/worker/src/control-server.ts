@@ -49,11 +49,33 @@ export async function buildControlServer(
     return reply.code(500).send({ error: error.message });
   });
 
+  /**
+   * Any request that names a session counts as a sign of life: it keeps the
+   * reaper from closing a session the UI is still driving.
+   */
+  app.addHook("onRequest", async (request) => {
+    const id = (request.params as { id?: string } | undefined)?.id;
+    if (id) sessions.find(id)?.touch();
+  });
+
   app.get("/health", async () => ({
     status: "ok",
     service: "worker",
     sessions: sessions.count
   }));
+
+  app.get("/sessions", async () =>
+    sessions.list().map((session) => ({
+      sessionId: session.sessionId,
+      userId: session.userId,
+      state: session.state,
+      startUrl: session.startUrl,
+      currentUrl: session.currentUrl,
+      recording: session.recording,
+      idleMs: session.idleMs,
+      expiresAt: session.expiresAt.toISOString()
+    }))
+  );
 
   app.get("/ready", async () => ({ status: "ready", sessions: sessions.count }));
 
@@ -80,6 +102,18 @@ export async function buildControlServer(
     if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
     const session = sessions.get(request.params.id);
     await session.setRecording(parsed.data.enabled);
+    return describe(session);
+  });
+
+  app.post<{ Params: { id: string } }>("/sessions/:id/arm-final", async (request, reply) => {
+    const parsed = ToggleSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
+    const session = sessions.get(request.params.id);
+    try {
+      await session.setArmedFinal(parsed.data.enabled);
+    } catch (err) {
+      return reply.code(409).send({ error: (err as Error).message });
+    }
     return describe(session);
   });
 
@@ -174,6 +208,7 @@ function describe(session: {
   startUrl: string;
   recording: boolean;
   highlight: boolean;
+  armedFinal: boolean;
   currentUrl: string | null;
   error: string | null;
   expiresAt: Date;
@@ -187,6 +222,7 @@ function describe(session: {
     startUrl: session.startUrl,
     recording: session.recording,
     highlight: session.highlight,
+    armedFinal: session.armedFinal,
     currentUrl: session.currentUrl,
     pages: session.listPages(),
     error: session.error,

@@ -150,7 +150,12 @@ test.describe("stop at the first error", () => {
 
     expect(execution.status).toBe("failed");
     expect(execution.failedStepId).toBe(ambiguous.id);
-    expect(execution.errorMessage).toMatch(/matches 2 elements/);
+    // The property under test is that ambiguity stops the run and is reported with
+    // the number of matches. The exact number belongs to the fixture page, so it
+    // must not be pinned here.
+    const match = /matches (\d+) elements/.exec(execution.errorMessage ?? "");
+    expect(match, `unexpected error: ${execution.errorMessage}`).not.toBeNull();
+    expect(Number(match![1])).toBeGreaterThan(1);
     expect(execution.errorMessage).toMatch(/instead of guessing/);
   });
 

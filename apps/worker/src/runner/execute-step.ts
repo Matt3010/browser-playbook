@@ -40,6 +40,42 @@ function pageFor(step: Step, ctx: StepExecutionContext): Page {
   return page;
 }
 
+/**
+ * True when an action failed only because another element sits on top of the
+ * target. The usual cause is a styled label covering its own hidden checkbox or
+ * radio, which is a legitimate page design rather than a broken selector.
+ */
+function isPointerIntercepted(error: unknown): boolean {
+  const message = (error as Error)?.message ?? "";
+  return message.includes("intercepts pointer events");
+}
+
+/**
+ * Performs a pointer action, and if the element turns out to be covered by its
+ * own label, performs it again bypassing the hit-target check.
+ *
+ * This is not a retry of the step: the element was found and is the right one,
+ * only the way the click is delivered changes. A genuinely missing or ambiguous
+ * element still fails the workflow immediately.
+ */
+async function withOverlayFallback(
+  step: Step,
+  ctx: StepExecutionContext,
+  action: (options: { timeout: number; force?: boolean }) => Promise<void>
+): Promise<void> {
+  try {
+    await action({ timeout: step.timeoutMs });
+  } catch (err) {
+    if (!isPointerIntercepted(err)) throw err;
+    await ctx.log(
+      "warn",
+      `'${step.name}': the element is covered by another one (typically its own label); ` +
+        `delivering the action directly to it`
+    );
+    await action({ timeout: step.timeoutMs, force: true });
+  }
+}
+
 async function locatorFor(step: Step, ctx: StepExecutionContext) {
   if (!step.selector) {
     throw new StepExecutionError(`Step '${step.name}' has no selector`);
@@ -71,7 +107,7 @@ export async function executeStep(step: Step, ctx: StepExecutionContext): Promis
 
     case "click": {
       const locator = await locatorFor(step, ctx);
-      await locator.click({ timeout: step.timeoutMs });
+      await withOverlayFallback(step, ctx, (options) => locator.click(options));
       return;
     }
 
@@ -95,13 +131,13 @@ export async function executeStep(step: Step, ctx: StepExecutionContext): Promis
 
     case "check": {
       const locator = await locatorFor(step, ctx);
-      await locator.check({ timeout: step.timeoutMs });
+      await withOverlayFallback(step, ctx, (options) => locator.check(options));
       return;
     }
 
     case "uncheck": {
       const locator = await locatorFor(step, ctx);
-      await locator.uncheck({ timeout: step.timeoutMs });
+      await withOverlayFallback(step, ctx, (options) => locator.uncheck(options));
       return;
     }
 

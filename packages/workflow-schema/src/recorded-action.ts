@@ -30,6 +30,7 @@ export const ElementInfoSchema = z.object({
   text: z.string().nullish(),
   testId: z.string().nullish(),
   nameAttr: z.string().nullish(),
+  valueAttr: z.string().nullish(),
   id: z.string().nullish(),
   cssPath: z.string().nullish(),
   xpath: z.string().nullish(),
@@ -46,6 +47,12 @@ export const RecordedActionSchema = z.object({
   key: z.string().nullish(),
   /** True when the source input was type="password": the value becomes a credential. */
   isPassword: z.boolean().nullish(),
+  /**
+   * True when the interaction was captured while the recorder was armed for a
+   * closing action: it was suppressed in the page and must run only at execution
+   * time, as the last step of the workflow.
+   */
+  isFinal: z.boolean().nullish(),
   pageId: z.string().default("main"),
   timestamp: z.number()
 });
@@ -215,12 +222,15 @@ export function actionToStep(
   const parsed = StepSchema.safeParse({
     id: newId(),
     type,
-    name: stepName(action, selector),
+    name: action.isFinal
+      ? `${stepName(action, selector)} (azione finale)`
+      : stepName(action, selector),
     pageId: action.pageId,
     selector,
     value,
     timeoutMs,
-    enabled: true
+    enabled: true,
+    isFinal: action.isFinal === true
   });
 
   if (!parsed.success) return null;

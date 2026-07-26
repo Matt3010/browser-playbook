@@ -119,7 +119,8 @@ export async function createTestContext(): Promise<TestContext> {
     RATE_LIMIT_MAX: "100000",
     REGISTER_RATE_LIMIT_MAX: "100000",
     LOGIN_RATE_LIMIT_MAX: "100000",
-    LOG_LEVEL: "silent"
+    // Quiet by default, but overridable so a failing test can be diagnosed.
+    LOG_LEVEL: process.env.LOG_LEVEL ?? "silent"
   } as NodeJS.ProcessEnv);
 
   const prisma = new PrismaClient({ datasources: { db: { url: config.databaseUrl } } });

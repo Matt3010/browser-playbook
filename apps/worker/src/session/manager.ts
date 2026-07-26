@@ -15,9 +15,13 @@ export class SessionNotFoundError extends Error {
   }
 }
 
+/** How often abandoned sessions are looked for. */
+const REAP_INTERVAL_MS = 15_000;
+
 export class SessionManager {
   private readonly sessions = new Map<string, BrowserSession>();
   private readonly allocator: SlotAllocator;
+  private reaper: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly config: WorkerConfig,
@@ -32,6 +36,39 @@ export class SessionManager {
     });
   }
 
+  /**
+   * Closes sessions nobody is driving any more. Without this a session whose
+   * page was closed would hold its slot until the maximum lifetime expired,
+   * blocking new sessions on a host with few slots.
+   */
+  startReaper(): void {
+    if (this.reaper) return;
+    this.reaper = setInterval(() => {
+      for (const session of [...this.sessions.values()]) {
+        if (!session.isIdle()) continue;
+        this.log.warn(
+          { sessionId: session.sessionId, idleMs: session.idleMs },
+          "Closing an abandoned browser session to reclaim its slot"
+        );
+        void session.close().catch((err) => {
+          this.log.error({ err, sessionId: session.sessionId }, "Failed to reap a session");
+        });
+      }
+    }, REAP_INTERVAL_MS);
+    this.reaper.unref();
+  }
+
+  stopReaper(): void {
+    if (this.reaper) {
+      clearInterval(this.reaper);
+      this.reaper = null;
+    }
+  }
+
+  list(): BrowserSession[] {
+    return [...this.sessions.values()];
+  }
+
   get count(): number {
     return this.sessions.size;
   }
@@ -41,6 +78,8 @@ export class SessionManager {
     userId: string;
     startUrl: string;
     timeoutMs?: number;
+    /** Omit for sessions driven by a running execution: those must not be reaped. */
+    idleTimeoutMs?: number | null;
   }): Promise<BrowserSession> {
     if (this.sessions.size >= this.config.maxSessions) {
       throw new SessionLimitError(this.config.maxSessions);
@@ -59,6 +98,8 @@ export class SessionManager {
       userId: input.userId,
       startUrl: input.startUrl,
       timeoutMs: input.timeoutMs ?? this.config.sessionTimeoutMs,
+      idleTimeoutMs:
+        input.idleTimeoutMs === undefined ? this.config.sessionIdleTimeoutMs : input.idleTimeoutMs,
       slot,
       screenWidth: this.config.screenWidth,
       screenHeight: this.config.screenHeight,
@@ -97,6 +138,7 @@ export class SessionManager {
   }
 
   async closeAll(): Promise<void> {
+    this.stopReaper();
     const sessions = [...this.sessions.values()];
     await Promise.allSettled(sessions.map((s) => s.close()));
     this.sessions.clear();

@@ -19,6 +19,7 @@ export interface Step {
   value: string | null;
   timeoutMs: number;
   enabled: boolean;
+  isFinal?: boolean;
 }
 
 export interface Execution {
@@ -137,6 +138,10 @@ export class AppClient {
 
   setRecording(sessionId: string, enabled: boolean) {
     return this.ok("POST", `/api/sessions/${sessionId}/recording`, { enabled });
+  }
+
+  armFinal(sessionId: string, enabled: boolean) {
+    return this.ok("POST", `/api/sessions/${sessionId}/arm-final`, { enabled });
   }
 
   setHighlight(sessionId: string, enabled: boolean) {
@@ -258,6 +263,7 @@ export interface TestWebState {
     notes: string;
   }>;
   uploads: Array<{ filename: string; size: number; content: string }>;
+  orders: Array<{ note: string; placedAt: string }>;
   loginAttempts: number;
 }
 

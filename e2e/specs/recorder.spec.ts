@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { AppClient, TEST_WEB_INTERNAL_URL, resetTestWeb } from "../helpers/app-client";
+import {
+  AppClient,
+  TEST_WEB_INTERNAL_URL,
+  getTestWebState,
+  resetTestWeb
+} from "../helpers/app-client";
 
 interface ElementInfo {
   tag: string;
@@ -279,6 +284,46 @@ test.describe("recorder action capture", () => {
     }
   });
 
+  test("records a click on a label covering a radio as a single check step", async () => {
+    // Reproduces the markup that broke a workflow on a real storefront: the radio
+    // is hidden under its own label, and the label text embeds a price.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, {
+        kind: "click",
+        selector: "#_r_b_label"
+      });
+
+      await expect
+        .poll(
+          async () =>
+            (await client.getRecording(session.sessionId)).steps.filter((s) =>
+              ["check", "click"].includes(s.type)
+            ).length,
+          { timeout: 30_000 }
+        )
+        .toBeGreaterThan(0);
+
+      const recording = await client.getRecording(session.sessionId);
+      const actions = recording.steps.filter((s) => ["check", "click", "uncheck"].includes(s.type));
+
+      // One interaction must produce exactly one step, and it must be the check.
+      expect(actions).toHaveLength(1);
+      expect(actions[0].type).toBe("check");
+
+      // The selector must not embed the price, and must address the radio by
+      // name and value rather than by its framework-generated id.
+      const selector = actions[0].selector as { strategy: string; value?: string };
+      expect(JSON.stringify(selector)).not.toContain("1.749,00");
+      expect(JSON.stringify(selector)).not.toContain("_r_b_");
+      expect(selector.strategy).toBe("css");
+      expect(selector.value).toBe('input[name="size-choice"][value="15inch"]');
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
   test("records a manual wait requested from the UI", async () => {
     const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
     try {
@@ -322,5 +367,146 @@ test.describe("recorder action capture", () => {
     } finally {
       await client.closeSession(session.sessionId).catch(() => undefined);
     }
+  });
+});
+
+test.describe("closing action captured without being performed", () => {
+  let client: AppClient;
+
+  test.beforeEach(async () => {
+    await resetTestWeb();
+    client = new AppClient();
+    await client.login();
+  });
+
+  test("records the final click, does not perform it, and runs it only on execution", async () => {
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/checkout`);
+    try {
+      await client.setRecording(session.sessionId, true);
+
+      // A normal step first, which must really happen while recording.
+      await client.interact(session.sessionId, {
+        kind: "fill",
+        selector: "#order-note",
+        value: "consegna al piano"
+      });
+
+      // Arm, then click the destructive button.
+      await client.armFinal(session.sessionId, true);
+      await client.interact(session.sessionId, { kind: "click", selector: "#place-order" });
+
+      // The order must NOT have been placed.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      expect((await getTestWebState()).orders, "no order may be placed while recording").toHaveLength(
+        0
+      );
+
+      // The page did not even navigate away from the checkout form.
+      const info = await client.getSession(session.sessionId);
+      expect(info.currentUrl).toContain("/checkout");
+
+      // The action was recorded, marked final, and recording stopped by itself.
+      const recording = await client.getRecording(session.sessionId);
+      const final = recording.steps.find((s) => s.isFinal);
+      expect(final, "the closing action must be recorded").toBeTruthy();
+      expect(final!.type).toBe("click");
+      expect(final).toBe(recording.steps[recording.steps.length - 1]);
+      expect(recording.steps.filter((s) => s.isFinal)).toHaveLength(1);
+      expect((await client.getSession(session.sessionId)).recording).toBe(false);
+
+      // Saving keeps the flag, and the workflow becomes runnable.
+      const workflow = await client.createWorkflow(
+        `Closing action ${Date.now()}`,
+        `${TEST_WEB_INTERNAL_URL}/checkout`
+      );
+      const saved = await client.putSteps(workflow.id, recording.steps);
+      expect(saved[saved.length - 1].isFinal).toBe(true);
+
+      // Running the workflow performs it for real.
+      const started = await client.runNow(workflow.id);
+      const execution = await client.waitForExecution(started.id);
+      expect(
+        execution.status,
+        `execution failed: ${execution.errorMessage ?? ""}`
+      ).toBe("completed");
+
+      const state = await getTestWebState();
+      expect(state.orders, "the order must be placed when the workflow runs").toHaveLength(1);
+      expect(state.orders[0].note).toBe("consegna al piano");
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
+  test("refuses a second closing action and refuses arming outside recording", async () => {
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/checkout`);
+    try {
+      // Not recording yet: arming makes no sense.
+      const early = await client.request(
+        "POST",
+        `/api/sessions/${session.sessionId}/arm-final`,
+        { enabled: true }
+      );
+      expect(early.status).toBe(409);
+
+      await client.setRecording(session.sessionId, true);
+      await client.armFinal(session.sessionId, true);
+      await client.interact(session.sessionId, { kind: "click", selector: "#place-order" });
+
+      await expect
+        .poll(async () => (await client.getRecording(session.sessionId)).steps.some((s) => s.isFinal), {
+          timeout: 30_000
+        })
+        .toBe(true);
+
+      // Recording stopped, and a second closing action is refused.
+      await client.setRecording(session.sessionId, true);
+      const second = await client.request(
+        "POST",
+        `/api/sessions/${session.sessionId}/arm-final`,
+        { enabled: true }
+      );
+      expect(second.status).toBe(409);
+      expect(second.text).toMatch(/already has a closing action/);
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
+  test("the API refuses to save a closing action that is not last", async () => {
+    const workflow = await client.createWorkflow(
+      `Closing action fuori posto ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/checkout`
+    );
+
+    const response = await client.request("PUT", `/api/workflows/${workflow.id}/steps`, {
+      steps: [
+        {
+          id: crypto.randomUUID(),
+          type: "goto",
+          name: "Vai al checkout",
+          pageId: "main",
+          selector: null,
+          value: `${TEST_WEB_INTERNAL_URL}/checkout`,
+          timeoutMs: 15000,
+          enabled: true,
+          isFinal: true
+        },
+        {
+          id: crypto.randomUUID(),
+          type: "click",
+          name: "Clicca dopo l'azione finale",
+          pageId: "main",
+          selector: { strategy: "id", value: "place-order", fallback: null, pageId: "main", frame: null },
+          value: null,
+          timeoutMs: 15000,
+          enabled: true,
+          isFinal: false
+        }
+      ]
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.text).toMatch(/must be the last enabled step/);
   });
 });

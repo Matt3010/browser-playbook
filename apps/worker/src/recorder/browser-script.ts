@@ -242,6 +242,8 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     const id = el.getAttribute("id");
     const text = (el.textContent || "").trim().replace(/\s+/g, " ").slice(0, 120);
 
+    const valueAttr = el.getAttribute("value");
+
     const unique: Record<string, boolean> = {};
     if (role && name) unique.role = countByRoleAndName(role, name) === 1;
     if (label) unique.label = countByLabel(label) === 1;
@@ -263,6 +265,7 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
       text: text || null,
       testId,
       nameAttr,
+      valueAttr,
       id,
       cssPath: cssPath(el),
       xpath: xpathOf(el),
@@ -342,7 +345,31 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
 
   // ---- action reporting -------------------------------------------------
 
-  const state = { recording: false, highlight: false, lastEmitAt: 0 };
+  const state = { recording: false, highlight: false, armedFinal: false, lastEmitAt: 0 };
+
+  /**
+   * While armed, the next pointer interaction is swallowed: no page handler runs
+   * and no default action happens, so a destructive closing action (placing an
+   * order, confirming a payment) can be captured without performing it.
+   */
+  function swallow(event: Event): void {
+    event.preventDefault();
+    event.stopPropagation();
+    event.stopImmediatePropagation();
+  }
+
+  for (const type of ["pointerdown", "mousedown", "mouseup", "pointerup", "dblclick"]) {
+    document.addEventListener(
+      type,
+      (event) => {
+        if (!state.armedFinal) return;
+        const target = event.target as Element | null;
+        if (!isInstrumented(target)) return;
+        swallow(event);
+      },
+      true
+    );
+  }
 
   function emit(action: Record<string, any>): void {
     if (!state.recording) return;
@@ -361,17 +388,50 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     return !!el && el.id !== TOOLTIP_ID;
   }
 
+  /**
+   * True when clicking this element toggles a checkbox or radio, either because
+   * it *is* one or because it sits inside that control's label. Sites commonly
+   * hide the real input behind a styled label, so a click there must be recorded
+   * as a check/uncheck (by the change handler) and not as a click: clicking the
+   * hidden input on replay fails, because its own label covers it.
+   */
+  function togglesAChoiceControl(el: Element): boolean {
+    const tag = tagOf(el);
+    const type = (el.getAttribute("type") || "").toLowerCase();
+    if (tag === "input" && (type === "checkbox" || type === "radio")) return true;
+
+    const label = el.closest("label");
+    if (!label) return false;
+
+    const forId = label.getAttribute("for");
+    let control: Element | null = null;
+    if (forId) {
+      control = document.getElementById(forId);
+    } else {
+      control = label.querySelector("input, select, textarea");
+    }
+    if (!control || tagOf(control) !== "input") return false;
+    const controlType = (control.getAttribute("type") || "").toLowerCase();
+    return controlType === "checkbox" || controlType === "radio";
+  }
+
   document.addEventListener(
     "click",
     (event) => {
       const target = event.target as Element | null;
       if (!isInstrumented(target)) return;
       const el = target as Element;
-      const tag = tagOf(el);
-      const type = (el.getAttribute("type") || "").toLowerCase();
-      // Checkbox/radio clicks are reported by the change handler instead, so a
-      // single interaction never produces two steps.
-      if (tag === "input" && (type === "checkbox" || type === "radio")) return;
+
+      // Armed closing action: record it and make sure the page never sees it.
+      if (state.armedFinal) {
+        swallow(event);
+        state.armedFinal = false;
+        emit({ kind: "click", element: describe(el), isFinal: true });
+        return;
+      }
+
+      // The change handler reports these, so one interaction never yields two steps.
+      if (togglesAChoiceControl(el)) return;
       emit({ kind: "click", element: describe(el) });
     },
     true
@@ -481,9 +541,10 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
 
   // ---- control surface --------------------------------------------------
 
-  function apply(next: { recording: boolean; highlight: boolean }): void {
+  function apply(next: { recording: boolean; highlight: boolean; armedFinal?: boolean }): void {
     state.recording = !!next.recording;
     state.highlight = !!next.highlight;
+    state.armedFinal = !!next.armedFinal;
     setHighlight(state.highlight);
     if (!state.highlight) hideTooltip();
   }

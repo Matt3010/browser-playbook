@@ -41,6 +41,21 @@ const STYLES = `
   dt { font-weight: 600; font-size: .8rem; color: #555c6b; }
   dd { margin: .15rem 0 .75rem; }
   fieldset { border: 1px solid #d6dae1; border-radius: 6px; margin-top: 1.5rem; }
+
+  /* The radio sits under its own label, so every click hits the label. */
+  .covered-choice { position: relative; margin: .5rem; }
+  .covered-choice input[type=radio] {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    margin: 0; opacity: 0; z-index: 1;
+  }
+  .covered-choice .covering-label {
+    position: relative; z-index: 2; display: block; margin: 0; cursor: pointer;
+    padding: .7rem 1rem; border: 1px solid #c9ced6; border-radius: 8px;
+    font-weight: 400; background: #fff;
+  }
+  .covered-choice input[type=radio]:checked + .covering-label {
+    border-color: #2f6fed; box-shadow: 0 0 0 2px rgba(47,111,237,.25);
+  }
 `;
 
 export function page(title: string, body: string): string {

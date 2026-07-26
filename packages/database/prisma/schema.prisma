@@ -56,6 +56,10 @@ model WorkflowStep {
   valueTemplate String?
   timeoutMs     Int      @default(10000)
   enabled       Boolean  @default(true)
+  /// A closing action recorded without being performed: the recorder captured the
+  /// interaction and suppressed it, so it runs only when the workflow runs. It
+  /// must be the last enabled step of the workflow.
+  isFinal       Boolean  @default(false)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

@@ -19,6 +19,8 @@ async function main(): Promise<void> {
 
   const consumer = startQueueConsumer({ config, prisma, notifications, sessions, log });
   const server = await buildControlServer(config, sessions, log);
+  // Reclaims the slots of sessions whose page was closed or abandoned.
+  sessions.startReaper();
 
   await reconcileMissedSchedules({ prisma, notifications, log }).catch((err) =>
     log.error({ err }, "Could not reconcile missed schedules")

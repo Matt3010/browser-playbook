@@ -161,6 +161,69 @@ test.describe("browser session isolation", () => {
     await client.closeSession(next.sessionId);
   });
 
+  test("the caller can list and close its own live sessions", async () => {
+    const client = new AppClient();
+    await client.login();
+
+    // Start from a clean slate: close anything this user still has open.
+    const existing = await client.request("GET", "/api/sessions");
+    for (const item of existing.json<Array<{ sessionId: string }>>()) {
+      await client.closeSession(item.sessionId).catch(() => undefined);
+    }
+
+    const first = await client.createSession(`${TEST_WEB_INTERNAL_URL}/login`);
+    const second = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+
+    const listed = (await client.request("GET", "/api/sessions")).json<
+      Array<{ sessionId: string; idleMs: number }>
+    >();
+    const ids = listed.map((s) => s.sessionId);
+    expect(ids).toContain(first.sessionId);
+    expect(ids).toContain(second.sessionId);
+
+    // Another user sees none of them.
+    const other = new AppClient();
+    await other.register(`lister-${Date.now()}@example.com`);
+    expect((await other.request("GET", "/api/sessions")).json<unknown[]>()).toHaveLength(0);
+
+    // Closing them frees the slots, which is the recovery path when the limit is hit.
+    for (const id of ids) await client.closeSession(id).catch(() => undefined);
+    expect((await client.request("GET", "/api/sessions")).json<unknown[]>()).toHaveLength(0);
+  });
+
+  test("an abandoned session is reclaimed so its slot becomes free again", async () => {
+    const client = new AppClient();
+    await client.login();
+
+    for (const item of (await client.request("GET", "/api/sessions")).json<
+      Array<{ sessionId: string }>
+    >()) {
+      await client.closeSession(item.sessionId).catch(() => undefined);
+    }
+
+    // Created and then never touched again: exactly what happens when the user
+    // closes the recorder tab.
+    const abandoned = await client.createSession(`${TEST_WEB_INTERNAL_URL}/login`);
+    expect(abandoned.state).toBe("ready");
+
+    // Observed through the list endpoint: asking for the session by id would
+    // count as driving it and keep the reaper away.
+    await expect
+      .poll(
+        async () =>
+          (await client.request("GET", "/api/sessions"))
+            .json<Array<{ sessionId: string }>>()
+            .some((s) => s.sessionId === abandoned.sessionId),
+        { timeout: 120_000, intervals: [3000] }
+      )
+      .toBe(false);
+
+    // The slot is free again.
+    const fresh = await client.createSession(`${TEST_WEB_INTERNAL_URL}/login`);
+    expect(fresh.state).toBe("ready");
+    await client.closeSession(fresh.sessionId);
+  });
+
   test("credentials are scoped to their owner", async () => {
     const owner = new AppClient();
     await owner.login();

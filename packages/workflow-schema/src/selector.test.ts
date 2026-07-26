@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { chooseSelector, describeSelector, buildFallback, type ElementInfo } from "./selector";
+import {
+  chooseSelector,
+  describeSelector,
+  buildFallback,
+  isGeneratedId,
+  MAX_TEXTUAL_SELECTOR_LENGTH,
+  type ElementInfo
+} from "./selector";
 
 const base: ElementInfo = { tag: "input" };
 
@@ -125,6 +132,117 @@ describe("selector generation priority", () => {
   it("defaults pageId to main", () => {
     const sel = chooseSelector({ ...base, label: "Nome", unique: { label: true } });
     expect(sel!.pageId).toBe("main");
+  });
+});
+
+describe("selectors on real-world markup", () => {
+  // The element that broke a workflow on a real storefront: a radio hidden
+  // under its own label, whose accessible name embeds the price.
+  const coveredRadio: ElementInfo = {
+    tag: "input",
+    type: "radio",
+    role: "radio",
+    accessibleName: '15" Nota 1 Da € 1.749,00 o € 57,26 al mese per 36 mesi, TAN fisso 10,99% Nota ①',
+    label: '15" Nota 1 Da € 1.749,00 o € 57,26 al mese per 36 mesi, TAN fisso 10,99% Nota ①',
+    nameAttr: "chassis-dimensionScreensize",
+    valueAttr: "15inch",
+    id: "_r_e_",
+    cssPath: "fieldset > div:nth-of-type(2) > div > label > span",
+    unique: { role: true, label: true, name: false, id: true }
+  };
+
+  it("refuses a label or accessible name that embeds volatile content", () => {
+    const sel = chooseSelector(coveredRadio);
+    expect(sel).not.toBeNull();
+    expect(sel!.strategy).not.toBe("label");
+    expect(sel!.strategy).not.toBe("role");
+    expect(JSON.stringify(sel)).not.toContain("1.749,00");
+  });
+
+  it("addresses a grouped radio by name and value", () => {
+    const sel = chooseSelector(coveredRadio);
+    expect(sel!.strategy).toBe("css");
+    expect(sel!.value).toBe('input[name="chassis-dimensionScreensize"][value="15inch"]');
+  });
+
+  it("prefers name+value over the deep structural css path", () => {
+    const sel = chooseSelector(coveredRadio);
+    expect(sel!.value).not.toContain("nth-of-type");
+    // The fallback would repeat the primary selector, so it is omitted.
+    expect(sel!.fallback).toBeNull();
+  });
+
+  it("keeps a distinct structural fallback when the primary is textual", () => {
+    const sel = chooseSelector({
+      tag: "input",
+      type: "radio",
+      label: "Express",
+      nameAttr: "shipping",
+      valueAttr: "express",
+      unique: { label: true }
+    });
+    expect(sel!.strategy).toBe("label");
+    expect(sel!.fallback).toBe('input[name="shipping"][value="express"]');
+  });
+
+  it("still uses a short label when it is not volatile", () => {
+    const sel = chooseSelector({
+      tag: "input",
+      type: "radio",
+      label: "Express",
+      nameAttr: "shipping",
+      valueAttr: "express",
+      unique: { label: true, name: false }
+    });
+    expect(sel!.strategy).toBe("label");
+    expect(sel!.value).toBe("Express");
+  });
+
+  it("keeps a meaningful id but rejects framework-generated ones", () => {
+    const meaningful = chooseSelector({
+      tag: "input",
+      id: "customer-email",
+      unique: { id: true }
+    });
+    expect(meaningful!.strategy).toBe("id");
+    expect(meaningful!.value).toBe("customer-email");
+
+    for (const generated of ["_r_e_", ":r0:", "radix-:r1:", "mui-1234", "1234", "__", "el7"]) {
+      const sel = chooseSelector({
+        tag: "input",
+        id: generated,
+        cssPath: "form > input",
+        unique: { id: true }
+      });
+      expect(sel!.strategy, `id '${generated}' must be rejected`).toBe("css");
+    }
+  });
+
+  it("caps textual selectors at the documented length", () => {
+    const long = "a".repeat(MAX_TEXTUAL_SELECTOR_LENGTH + 1);
+    const short = "a".repeat(MAX_TEXTUAL_SELECTOR_LENGTH);
+    expect(
+      chooseSelector({ tag: "input", label: long, cssPath: "form > input", unique: { label: true } })!
+        .strategy
+    ).toBe("css");
+    expect(
+      chooseSelector({ tag: "input", label: short, cssPath: "form > input", unique: { label: true } })!
+        .strategy
+    ).toBe("label");
+  });
+});
+
+describe("isGeneratedId", () => {
+  it("detects generated ids", () => {
+    for (const id of ["_r_e_", ":r0:", "radix-:r1:", "mui-1234", "42", "", "  ", "a1", "abc-12"]) {
+      expect(isGeneratedId(id), id).toBe(true);
+    }
+  });
+
+  it("accepts author-written ids", () => {
+    for (const id of ["email", "customer-email", "fullname", "wizard-email", "download-link"]) {
+      expect(isGeneratedId(id), id).toBe(false);
+    }
   });
 });
 

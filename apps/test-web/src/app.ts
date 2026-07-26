@@ -72,6 +72,7 @@ export async function buildTestWeb(): Promise<FastifyInstance> {
       config: state.config,
       wizardSubmissions: state.wizardSubmissions,
       uploads: state.uploads,
+      orders: state.orders,
       loginAttempts: state.loginAttempts
     };
   });
@@ -324,6 +325,40 @@ ${summary}`
   <input id="disabled-input" type="text" value="non modificabile" disabled>
 </div>
 
+<fieldset>
+  <legend>Taglia (input coperto dalla propria label)</legend>
+  <!--
+    Reproduces the pattern used by many real storefronts: the radio input is
+    visually hidden underneath a styled label, so a click always lands on the
+    label and never on the input itself. The label text also embeds volatile
+    content (a price), which must not end up in the recorded selector.
+  -->
+  <div class="covered-choice">
+    <input id="_r_a_" type="radio" name="size-choice" value="13inch" checked
+           aria-labelledby="_r_a_label">
+    <label for="_r_a_" id="_r_a_label" class="covering-label">
+      <span><span>13"</span> <span>Da &euro; 1.249,00 o &euro; 41,63 al mese per 36 mesi, TAN fisso 10,99%</span></span>
+    </label>
+  </div>
+  <div class="covered-choice">
+    <input id="_r_b_" type="radio" name="size-choice" value="15inch"
+           aria-labelledby="_r_b_label">
+    <label for="_r_b_" id="_r_b_label" class="covering-label">
+      <span><span>15"</span> <span>Da &euro; 1.749,00 o &euro; 57,26 al mese per 36 mesi, TAN fisso 10,99%</span></span>
+    </label>
+  </div>
+  <p>Scelta: <span id="size-result" data-testid="size-result">13inch</span></p>
+</fieldset>
+<script>
+  document.querySelectorAll('input[name="size-choice"]').forEach(function (input) {
+    input.addEventListener("change", function () {
+      if (input.checked) {
+        document.getElementById("size-result").textContent = input.value;
+      }
+    });
+  });
+</script>
+
 <form method="post" action="/elements/upload" enctype="multipart/form-data">
   <label for="upload">Carica un file</label>
   <input id="upload" name="file" type="file">
@@ -448,6 +483,37 @@ ${confirmButton}
       });
   }
 </script>`
+      )
+    );
+  });
+
+  // ---- destructive action, used to verify the closing-action capture --------
+
+  app.get("/checkout", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Checkout - test-web",
+        `<h1>Conferma ordine</h1>
+<p>Ordini registrati: <span id="order-count" data-testid="order-count">${
+          getState().orders.length
+        }</span></p>
+<form method="post" action="/checkout">
+  <label for="order-note">Note per il corriere</label>
+  <input id="order-note" name="note" type="text">
+  <button id="place-order" type="submit">Acquista ora</button>
+</form>`
+      )
+    )
+  );
+
+  app.post("/checkout", async (request, reply) => {
+    const body = (request.body ?? {}) as { note?: string };
+    getState().orders.push({ note: body.note ?? "", placedAt: new Date().toISOString() });
+    return reply.type("text/html").send(
+      page(
+        "Ordine effettuato - test-web",
+        `<h1>Ordine effettuato</h1>
+<p data-testid="order-confirmed">Grazie, il tuo ordine e stato registrato.</p>`
       )
     );
   });

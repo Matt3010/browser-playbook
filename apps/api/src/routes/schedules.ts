@@ -37,7 +37,8 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
         selector: row.selectorJson ?? null,
         value: row.valueTemplate,
         timeoutMs: row.timeoutMs,
-        enabled: row.enabled
+        enabled: row.enabled,
+        isFinal: row.isFinal
       })
     );
     if (!isRunnableStepList(steps)) {

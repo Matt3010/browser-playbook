@@ -29,6 +29,13 @@ export interface SessionOptions {
   userId: string;
   startUrl: string;
   timeoutMs: number;
+  /**
+   * When set, the session closes itself after this long without being touched by
+   * a request. It reclaims the slot of a session whose page was closed or
+   * abandoned. Sessions driven by a running execution leave it unset, because
+   * nothing polls them from outside.
+   */
+  idleTimeoutMs?: number | null;
   slot: SessionSlot;
   screenWidth: number;
   screenHeight: number;
@@ -56,6 +63,8 @@ export class BrowserSession {
   error: string | null = null;
   recording = false;
   highlight = true;
+  /** Armed to capture the next interaction without letting the page perform it. */
+  armedFinal = false;
   readonly expiresAt: Date;
 
   private readonly options: SessionOptions;
@@ -70,6 +79,8 @@ export class BrowserSession {
   private lastActionAt = 0;
   private timeoutTimer: NodeJS.Timeout | null = null;
   private closing = false;
+  private lastTouchedAt = Date.now();
+  readonly idleTimeoutMs: number | null;
 
   constructor(options: SessionOptions) {
     this.options = options;
@@ -79,6 +90,21 @@ export class BrowserSession {
     this.slot = options.slot;
     this.log = options.logger.child({ sessionId: options.sessionId });
     this.expiresAt = new Date(Date.now() + options.timeoutMs);
+    this.idleTimeoutMs = options.idleTimeoutMs ?? null;
+  }
+
+  /** Records that something is still driving this session. */
+  touch(): void {
+    this.lastTouchedAt = Date.now();
+  }
+
+  get idleMs(): number {
+    return Date.now() - this.lastTouchedAt;
+  }
+
+  /** True when nobody has touched the session for longer than allowed. */
+  isIdle(): boolean {
+    return this.idleTimeoutMs !== null && this.idleMs > this.idleTimeoutMs;
   }
 
   // ---- lifecycle ---------------------------------------------------------
@@ -180,7 +206,8 @@ export class BrowserSession {
     });
     await this.context.exposeBinding("__recorderConfig", () => ({
       recording: this.recording,
-      highlight: this.highlight
+      highlight: this.highlight,
+      armedFinal: this.armedFinal
     }));
     await this.context.addInitScript(recorderBrowserScript, {
       css: buildHighlightCss(DEFAULT_RECORDER_COLORS, TOOLTIP_ID),
@@ -356,6 +383,32 @@ export class BrowserSession {
   private pushAction(action: RecordedAction): void {
     this.actions.push(action);
     this.lastActionAt = Date.now();
+
+    if (action.isFinal) {
+      // The closing action has been captured: nothing may follow it, so disarm and
+      // stop recording straight away.
+      this.armedFinal = false;
+      this.recording = false;
+      if (this.state === "running") this.state = "ready";
+      void this.applyConfigToAllPages().catch(() => undefined);
+      this.log.info("Captured the closing action without performing it; recording stopped");
+    }
+  }
+
+  /**
+   * Arms the capture of a closing action. The next interaction in the page is
+   * recorded and suppressed, so a destructive final step (confirming an order)
+   * never happens while recording.
+   */
+  async setArmedFinal(enabled: boolean): Promise<void> {
+    if (enabled && !this.recording) {
+      throw new Error("Start recording before arming the closing action");
+    }
+    if (enabled && this.actions.some((a) => a.isFinal)) {
+      throw new Error("This recording already has a closing action");
+    }
+    this.armedFinal = enabled;
+    await this.applyConfigToAllPages();
   }
 
   async setRecording(enabled: boolean): Promise<void> {
@@ -398,7 +451,11 @@ export class BrowserSession {
   }
 
   private async applyConfigToPage(page: Page): Promise<void> {
-    const config = { recording: this.recording, highlight: this.highlight };
+    const config = {
+      recording: this.recording,
+      highlight: this.highlight,
+      armedFinal: this.armedFinal
+    };
     try {
       for (const frame of page.frames()) {
         await frame

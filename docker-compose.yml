@@ -33,9 +33,10 @@ services:
       retries: 12
 
   migrate:
-    build:
-      context: .
-      dockerfile: docker/api/Dockerfile
+    # Deliberately no build block: it reuses the api image. Declaring the same
+    # Dockerfile twice produced two independent images, so rebuilding only one of
+    # them silently left the migration runner on stale code.
+    image: browser-automation-api:latest
     command: >
       sh -c "cd packages/database
       && node_modules/.bin/prisma migrate deploy
@@ -51,6 +52,7 @@ services:
     restart: "no"
 
   api:
+    image: browser-automation-api:latest
     build:
       context: .
       dockerfile: docker/api/Dockerfile

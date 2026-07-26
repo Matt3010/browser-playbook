@@ -62,12 +62,32 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     }
   }, [loadWorkflow, loadSchedules]);
 
-  // Stop polling and release the remote browser when leaving the page.
+  // Release the remote browser when leaving the page, so its slot does not stay
+  // taken until the idle timeout reclaims it. `keepalive` lets the request
+  // outlive the page during a tab close or a reload.
   useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
+    const sessionId = session?.sessionId;
+    if (!sessionId) return;
+
+    const release = () => {
+      try {
+        void fetch(`/api/sessions/${sessionId}`, {
+          method: "DELETE",
+          credentials: "include",
+          keepalive: true
+        });
+      } catch {
+        // The server-side reaper is the backstop.
+      }
     };
-  }, []);
+
+    window.addEventListener("pagehide", release);
+    return () => {
+      window.removeEventListener("pagehide", release);
+      if (pollRef.current) clearInterval(pollRef.current);
+      release();
+    };
+  }, [session?.sessionId]);
 
   async function run<T>(label: string, action: () => Promise<T>): Promise<T | undefined> {
     setBusy(label);
@@ -94,6 +114,19 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
       setSession(created);
       log(`Sessione browser ${created.sessionId} avviata (${created.state})`);
       startPolling(created.sessionId);
+    });
+  }
+
+  /** Closes every live session of the current user, to free the session slots. */
+  async function releaseStaleSessions() {
+    await run("release", async () => {
+      const live = await api.get<Array<{ sessionId: string }>>("/sessions");
+      for (const item of live) {
+        await api.del(`/sessions/${item.sessionId}`).catch(() => undefined);
+      }
+      if (pollRef.current) clearInterval(pollRef.current);
+      setSession(null);
+      log(`${live.length} sessioni chiuse`);
     });
   }
 
@@ -138,6 +171,25 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
         setDirty(true);
       }
       log(enabled ? "Registrazione avviata" : "Registrazione fermata");
+    });
+  }
+
+  /**
+   * Arms the capture of the closing action. The next thing clicked in the remote
+   * browser is recorded but not performed, so a destructive final step is never
+   * triggered while recording.
+   */
+  async function armFinalAction() {
+    if (!session) return;
+    await run("arm", async () => {
+      const next = !session.armedFinal;
+      await api.post(`/sessions/${session.sessionId}/arm-final`, { enabled: next });
+      setSession({ ...session, armedFinal: next });
+      log(
+        next
+          ? "Azione finale armata: il prossimo click verra registrato ma NON eseguito"
+          : "Azione finale disarmata"
+      );
     });
   }
 
@@ -248,9 +300,22 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
       </div>
 
       {error ? (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" data-testid="recorder-error">
-          {error}
-        </p>
+        <div
+          className="flex flex-wrap items-center gap-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700"
+          data-testid="recorder-error"
+        >
+          <span>{error}</span>
+          {error.includes("concurrent browser sessions") ? (
+            <button
+              className="btn-secondary"
+              onClick={releaseStaleSessions}
+              disabled={busy !== null}
+              data-testid="release-sessions"
+            >
+              Chiudi le sessioni aperte
+            </button>
+          ) : null}
+        </div>
       ) : null}
 
       {/* toolbar */}
@@ -286,6 +351,15 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
               data-testid="stop-recording"
             >
               Stop
+            </button>
+            <button
+              className={session.armedFinal ? "btn-danger" : "btn-secondary"}
+              onClick={armFinalAction}
+              disabled={busy !== null || !session.recording}
+              title="Registra l'ultima azione senza eseguirla: verra eseguita solo all'avvio del workflow"
+              data-testid="arm-final"
+            >
+              {session.armedFinal ? "Armata: clicca il bottone finale" : "Azione finale"}
             </button>
             <button className="btn-secondary" onClick={toggleHighlight} disabled={busy !== null} data-testid="toggle-highlight">
               Evidenzia: {session.highlight ? "on" : "off"}

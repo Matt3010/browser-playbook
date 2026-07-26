@@ -47,6 +47,7 @@ function rowToStep(row: {
   valueTemplate: string | null;
   timeoutMs: number;
   enabled: boolean;
+  isFinal: boolean;
 }): Step {
   return StepSchema.parse({
     id: row.id,
@@ -56,7 +57,8 @@ function rowToStep(row: {
     selector: row.selectorJson ?? null,
     value: row.valueTemplate,
     timeoutMs: row.timeoutMs,
-    enabled: row.enabled
+    enabled: row.enabled,
+    isFinal: row.isFinal
   });
 }
 
@@ -169,7 +171,10 @@ export async function runExecution(
       sessionId: input.executionId,
       userId: input.userId,
       startUrl: firstUrl(steps) ?? workflow.startUrl,
-      timeoutMs: config.sessionTimeoutMs
+      timeoutMs: config.sessionTimeoutMs,
+      // Nothing polls an execution's session from outside, so it must never be
+      // reaped as idle: it lives exactly as long as the execution does.
+      idleTimeoutMs: null
     });
     // The session is visible over noVNC while the execution runs.
     await session.setHighlight(false);
