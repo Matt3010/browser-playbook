@@ -378,7 +378,10 @@ export class BrowserSession {
     if (!this.recording) return;
     const parsed = RecordedActionSchema.safeParse({
       ...payload,
-      pageId: this.pageIdOf(page)
+      pageId: this.pageIdOf(page),
+      // Names a captured credential after the site, so recording a second site
+      // cannot overwrite the first one's secret.
+      pageUrl: safeUrl(page)
     });
     if (!parsed.success) {
       this.log.warn({ issues: parsed.error.issues }, "Discarded malformed recorded action");

@@ -48,6 +48,11 @@ export const RecordedActionSchema = z.object({
   /** True when the source input was type="password": the value becomes a credential. */
   isPassword: z.boolean().nullish(),
   /**
+   * URL of the page the action happened on. Used to name a captured credential
+   * after the site, so two sites never share one secret.
+   */
+  pageUrl: z.string().nullish(),
+  /**
    * True when the interaction was captured while the recorder was armed for a
    * closing action: it was suppressed in the page and must run only at execution
    * time, as the last step of the workflow.
@@ -121,16 +126,49 @@ function stepName(action: RecordedAction, selector: Selector | null): string {
   }
 }
 
-/** Derives a stable credential name from the recorded password field. */
-export function credentialNameFromElement(element: ElementInfo | null | undefined): string {
-  const raw = element?.nameAttr || element?.id || element?.label || element?.placeholder || "password";
-  const slug = raw
+function slugify(value: string): string {
+  return value
     .toString()
     .trim()
     .replace(/[^a-zA-Z0-9]+/g, "_")
     .replace(/^_+|_+$/g, "")
     .toLowerCase();
-  return slug.length > 0 ? slug : "password";
+}
+
+/**
+ * The site a credential belongs to, as a slug. The port is dropped and a `www.`
+ * prefix ignored: neither is part of the site's identity, and including them
+ * would create a second credential for the same login.
+ */
+export function siteSlugFromUrl(pageUrl: string | null | undefined): string | null {
+  if (!pageUrl) return null;
+  let host: string;
+  try {
+    const parsed = new URL(pageUrl);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+    host = parsed.hostname.replace(/^www\./i, "");
+  } catch {
+    return null;
+  }
+  const slug = slugify(host);
+  return slug.length > 0 ? slug : null;
+}
+
+/**
+ * Derives a credential name from the recorded password field *and* the site.
+ *
+ * Naming it after the field alone is not enough: every login form calls it
+ * `password`, so recording a second site would overwrite the first site's secret
+ * and leave the first workflow signing in with the wrong password.
+ */
+export function credentialNameFromElement(
+  element: ElementInfo | null | undefined,
+  pageUrl?: string | null
+): string {
+  const raw = element?.nameAttr || element?.id || element?.label || element?.placeholder || "password";
+  const field = slugify(raw) || "password";
+  const site = siteSlugFromUrl(pageUrl);
+  return site ? `${field}_${site}` : field;
 }
 
 export interface ActionConversion {
@@ -198,7 +236,7 @@ export function actionToStep(
       break;
     case "fill": {
       if (action.isPassword) {
-        const name = credentialNameFromElement(action.element);
+        const name = credentialNameFromElement(action.element, action.pageUrl);
         value = `{{credentials.${name}}}`;
         credential = { name, value: action.value ?? "" };
       } else {

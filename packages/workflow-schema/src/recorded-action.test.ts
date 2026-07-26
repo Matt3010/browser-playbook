@@ -253,3 +253,102 @@ describe("action stream to step list", () => {
     expect(result.skipped).toHaveLength(1);
   });
 });
+
+describe("credential naming across sites", () => {
+  const passwordField = {
+    tag: "input",
+    type: "password",
+    label: "Password",
+    nameAttr: "password",
+    unique: { label: true, name: true }
+  };
+
+  it("gives two different sites two different credential names", () => {
+    // Every login form calls the field "password". Naming the credential after
+    // the field alone means recording a second site overwrites the first site's
+    // secret, and the first workflow then logs in with the wrong password.
+    const first = actionToStep(
+      action({
+        kind: "fill",
+        element: passwordField,
+        value: "segreto-uno",
+        isPassword: true,
+        pageUrl: "https://shop.example.com/login"
+      }),
+      { newId }
+    );
+    const second = actionToStep(
+      action({
+        kind: "fill",
+        element: passwordField,
+        value: "segreto-due",
+        isPassword: true,
+        pageUrl: "https://banca.example.it/accedi"
+      }),
+      { newId }
+    );
+
+    expect(first!.credential!.name).not.toBe(second!.credential!.name);
+    expect(first!.step.value).not.toBe(second!.step.value);
+    expect(first!.credential!.name).toContain("shop_example_com");
+    expect(second!.credential!.name).toContain("banca_example_it");
+  });
+
+  it("reuses the same name for the same site, so re-recording updates it", () => {
+    const build = (value: string) =>
+      actionToStep(
+        action({
+          kind: "fill",
+          element: passwordField,
+          value,
+          isPassword: true,
+          pageUrl: "https://shop.example.com/login"
+        }),
+        { newId }
+      )!;
+
+    expect(build("vecchia").credential!.name).toBe(build("nuova").credential!.name);
+  });
+
+  it("ignores the port and a www prefix, which are not part of the identity", () => {
+    const name = (url: string) =>
+      actionToStep(
+        action({ kind: "fill", element: passwordField, value: "x", isPassword: true, pageUrl: url }),
+        { newId }
+      )!.credential!.name;
+
+    expect(name("http://www.example.com/login")).toBe(name("https://example.com/other"));
+    expect(name("http://example.com:8080/login")).toBe(name("http://example.com/login"));
+  });
+
+  it("keeps the field name in the credential, so it stays readable", () => {
+    const result = actionToStep(
+      action({
+        kind: "fill",
+        element: { ...passwordField, nameAttr: "otp_code" },
+        value: "123",
+        isPassword: true,
+        pageUrl: "https://example.com/login"
+      }),
+      { newId }
+    );
+    expect(result!.credential!.name).toBe("otp_code_example_com");
+    expect(result!.step.value).toBe("{{credentials.otp_code_example_com}}");
+  });
+
+  it("falls back to the field name when the page URL is unusable", () => {
+    for (const url of [undefined, "", "not a url", "about:blank"]) {
+      const result = actionToStep(
+        action({
+          kind: "fill",
+          element: passwordField,
+          value: "x",
+          isPassword: true,
+          pageUrl: url
+        }),
+        { newId }
+      );
+      expect(result!.credential!.name, String(url)).toBe("password");
+    }
+  });
+});

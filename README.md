@@ -211,6 +211,11 @@ auto-healing.
 {{credentials.password}}
 ```
 
+A credential captured while recording is named after the field **and the site**
+(`password_example_com`), so recording a login on a second site cannot overwrite
+the first site's secret. Re-recording the same site updates it, which is what you
+want when a password changes.
+
 Both kinds are encrypted at rest with AES-256-GCM. Variable values can be read
 back through the API; secret values never can. A `type="password"` field
 automatically becomes a credential while recording, and the captured value is
@@ -322,6 +327,11 @@ GET  /api/test/state        submitted data, uploads, login attempts
 * Cross-origin iframes are not supported; same-origin frames are.
 * A recorded action whose element has no unique selector is **skipped** and
   reported instead of being guessed. The recorder counts them (`skipped`).
+* A recorded `upload` step stores the file name, but the runner may only send
+  files from the fixture directory baked into the worker image. A recorded upload
+  therefore does not replay until that file is placed there.
+* The recorder does not look inside shadow DOM, so elements rendered by web
+  components are not detected.
 * Notifications are in-app only. The provider interface is ready for external
   channels, but none is implemented.
 * Sessions are isolated by browser context and temporary profile inside one

@@ -1,9 +1,11 @@
 import { test, expect } from "@playwright/test";
 import {
   AppClient,
+  SHOP_WEB_INTERNAL_URL,
   TEST_WEB_INTERNAL_URL,
   getTestWebState,
-  resetTestWeb
+  resetTestWeb,
+  step
 } from "../helpers/app-client";
 
 interface ElementInfo {
@@ -517,5 +519,110 @@ test.describe("closing action captured without being performed", () => {
 
     expect(response.status).toBe(400);
     expect(response.text).toMatch(/must be the last enabled step/);
+  });
+});
+
+test.describe("credentials recorded on different sites", () => {
+  let client: AppClient;
+
+  test.beforeEach(async () => {
+    await resetTestWeb();
+    client = new AppClient();
+    await client.login();
+  });
+
+  /** Records a login and stores whatever credential it captured. */
+  async function recordLogin(startUrl: string, password: string): Promise<string[]> {
+    const session = await client.createSession(`${startUrl}/login`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, {
+        kind: "fill",
+        selector: "#email",
+        value: "test@example.com"
+      });
+      await client.interact(session.sessionId, {
+        kind: "fill",
+        selector: "#password",
+        value: password
+      });
+      const saved = await client.saveRecordedCredentials(session.sessionId);
+      return saved.saved;
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  }
+
+  test("recording a second site does not overwrite the first site's secret", async () => {
+    // Every login form calls the field "password". Named after the field alone,
+    // the second recording would replace the first site's secret and leave the
+    // first workflow signing in with the wrong one.
+    const first = await recordLogin(TEST_WEB_INTERNAL_URL, "TestPassword123!");
+    const second = await recordLogin(SHOP_WEB_INTERNAL_URL, "UnaAltraPassword999!");
+
+    expect(first[0]).not.toBe(second[0]);
+    expect(first[0]).toContain("test_web");
+    expect(second[0]).toContain("shop_web");
+
+    // Both exist side by side, and neither value is readable through the API.
+    const stored = await client.listCredentials();
+    const names = stored.map((c) => c.name);
+    expect(names).toContain(first[0]);
+    expect(names).toContain(second[0]);
+    for (const credential of stored) {
+      if (credential.kind === "secret") expect(credential.value).toBeNull();
+    }
+  });
+
+  test("the first workflow still signs in after the second site is recorded", async () => {
+    // The decisive check: the secret the first workflow uses must still be the
+    // right one, which only a successful login can prove.
+    const firstNames = await recordLogin(TEST_WEB_INTERNAL_URL, "TestPassword123!");
+    await recordLogin(SHOP_WEB_INTERNAL_URL, "UnaAltraPassword999!");
+
+    const workflow = await client.createWorkflow(
+      `Login dopo secondo sito ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/login`
+    );
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai al login", value: `${TEST_WEB_INTERNAL_URL}/login` }),
+      step({
+        type: "fill",
+        name: "Inserisci Email",
+        value: "test@example.com",
+        selector: { strategy: "id", value: "email", fallback: null, pageId: "main", frame: null }
+      }),
+      step({
+        type: "fill",
+        name: "Inserisci Password",
+        value: `{{credentials.${firstNames[0]}}}`,
+        selector: { strategy: "id", value: "password", fallback: null, pageId: "main", frame: null }
+      }),
+      step({
+        type: "click",
+        name: "Clicca Login",
+        selector: {
+          strategy: "role",
+          role: "button",
+          name: "Login",
+          fallback: "button[type=submit]",
+          pageId: "main",
+          frame: null
+        }
+      }),
+      step({
+        type: "assertVisible",
+        name: "Verifica di essere sulla dashboard",
+        selector: { strategy: "testid", value: "welcome", fallback: null, pageId: "main", frame: null }
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+    expect(
+      execution.status,
+      `the first workflow must still log in: ${execution.errorMessage ?? ""}`
+    ).toBe("completed");
+    expect(execution.currentUrl).toContain("/dashboard");
   });
 });

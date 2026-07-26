@@ -128,11 +128,20 @@ test.describe("main end-to-end flow", () => {
     expect(types).toContain("check");
     expect(recording.skipped).toBe(0);
 
-    // The password became a credential reference, never a literal.
-    const passwordStep = recording.steps.find((s) => s.value === "{{credentials.password}}");
+    // The password became a credential reference, never a literal. The name is
+    // derived from the site as well as the field, so recording another site
+    // cannot overwrite this secret.
+    const passwordStep = recording.steps.find((s) =>
+      /^\{\{credentials\.[a-z0-9_]+\}\}$/.test(s.value ?? "")
+    );
     expect(passwordStep, "the password step must reference a credential").toBeTruthy();
     expect(JSON.stringify(recording.steps)).not.toContain(SEED_PASSWORD);
-    expect(recording.credentials.map((c) => c.name)).toContain("password");
+
+    const credentialName = recording.credentials[0]?.name;
+    expect(credentialName, "the captured credential must be named").toBeTruthy();
+    expect(credentialName).toContain("password");
+    expect(credentialName).toContain("test_web");
+    expect(passwordStep!.value).toBe(`{{credentials.${credentialName}}}`);
 
     // The UI shows the recorded steps in order.
     await expect(page.getByTestId("step-list")).toBeVisible();
@@ -150,7 +159,7 @@ test.describe("main end-to-end flow", () => {
 
     // The captured secret was stored, encrypted and unreadable through the API.
     const credentials = await client.listCredentials();
-    const stored = credentials.find((c) => c.name === "password");
+    const stored = credentials.find((c) => c.name === credentialName);
     expect(stored).toBeTruthy();
     expect(stored!.kind).toBe("secret");
     expect(stored!.value).toBeNull();

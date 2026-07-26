@@ -6,6 +6,8 @@ export const APP_BASE_URL = process.env.APP_BASE_URL ?? "http://localhost:8081";
 export const TEST_WEB_PUBLIC_URL = process.env.TEST_WEB_PUBLIC_URL ?? "http://localhost:3901";
 /** How test-web is reachable from inside the Docker network. */
 export const TEST_WEB_INTERNAL_URL = "http://test-web:3001";
+/** The same fake application under a second hostname, to simulate another site. */
+export const SHOP_WEB_INTERNAL_URL = "http://shop-web:3001";
 
 export const SEED_EMAIL = "test@example.com";
 export const SEED_PASSWORD = "TestPassword123!";
