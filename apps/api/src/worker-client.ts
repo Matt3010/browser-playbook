@@ -114,6 +114,10 @@ export class WorkerClient {
     return this.call("GET", `/sessions/${sessionId}/recording`);
   }
 
+  clearRecording(sessionId: string): Promise<WorkerSessionInfo> {
+    return this.call("DELETE", `/sessions/${sessionId}/recording`);
+  }
+
   navigate(sessionId: string, url: string): Promise<WorkerSessionInfo> {
     return this.call("POST", `/sessions/${sessionId}/navigate`, { url });
   }

@@ -459,8 +459,17 @@ test.describe("closing action captured without being performed", () => {
         })
         .toBe(true);
 
-      // Recording stopped, and a second closing action is refused.
-      await client.setRecording(session.sessionId, true);
+      // Recording cannot be resumed once a closing action exists: anything
+      // recorded afterwards would sit after it and could never be saved.
+      const resume = await client.request(
+        "POST",
+        `/api/sessions/${session.sessionId}/recording`,
+        { enabled: true }
+      );
+      expect(resume.status).toBe(409);
+      expect(resume.text).toMatch(/closing action/i);
+
+      // Arming a second closing action is refused too.
       const second = await client.request(
         "POST",
         `/api/sessions/${session.sessionId}/arm-final`,

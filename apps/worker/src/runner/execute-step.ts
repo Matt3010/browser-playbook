@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { assertSafeTargetUrl, renderTemplate, type TemplateContext } from "@app/shared";
 import type { Step } from "@app/workflow-schema";
 import { resolveUnique } from "./locator";
+import { gotoTolerantOfRedirects } from "./navigation";
 import type { BrowserSession } from "../session/session";
 
 export interface StepExecutionContext {
@@ -101,7 +102,9 @@ export async function executeStep(step: Step, ctx: StepExecutionContext): Promis
         allowedHosts: ctx.urlSafety.allowedHosts
       });
       const page = pageFor(step, ctx);
-      await page.goto(url, { waitUntil: "domcontentloaded", timeout: step.timeoutMs });
+      await gotoTolerantOfRedirects(page, url, step.timeoutMs, (message) =>
+        ctx.log("warn", `'${step.name}': ${message}`)
+      );
       return;
     }
 

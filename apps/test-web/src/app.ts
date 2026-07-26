@@ -518,6 +518,21 @@ ${confirmButton}
     );
   });
 
+  /**
+   * Navigates itself away as soon as it loads. Real sites do this (geo/locale
+   * redirects, consent walls), and it makes Playwright's `goto` fail with
+   * "interrupted by another navigation" unless the runner tolerates it.
+   */
+  app.get("/redirecting", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Redirect - test-web",
+        `<h1>Un attimo...</h1>
+<script>window.location.replace("/elements");</script>`
+      )
+    )
+  );
+
   app.get("/api/flaky", async (_request, reply) => {
     if (getState().config.failApi) {
       return reply.code(500).send({ error: "Errore interno simulato" });

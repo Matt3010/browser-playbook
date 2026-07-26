@@ -50,11 +50,35 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
     const execution = await app.prisma.execution.create({
       data: { workflowId: workflow.id, status: "queued" }
     });
-    await app.queue.enqueueNow({
-      executionId: execution.id,
-      workflowId: workflow.id,
-      userId
-    });
+
+    try {
+      await app.queue.enqueueNow({
+        executionId: execution.id,
+        workflowId: workflow.id,
+        userId
+      });
+    } catch (err) {
+      // The row exists but no job does. Left as `queued` it would show up as
+      // pending forever, never running and never failing, so it is closed here.
+      app.log.error({ err, executionId: execution.id }, "Failed to enqueue execution");
+      const failed = await app.prisma.execution.update({
+        where: { id: execution.id },
+        data: {
+          status: "failed",
+          finishedAt: new Date(),
+          errorMessage: "Could not enqueue the execution job"
+        }
+      });
+      await app.prisma.executionLog.create({
+        data: {
+          executionId: failed.id,
+          level: "error",
+          message: "Could not enqueue the execution job: the queue is unavailable"
+        }
+      });
+      return reply.code(503).send({ error: "Could not enqueue the execution job" });
+    }
+
     return reply.code(202).send(execution);
   });
 

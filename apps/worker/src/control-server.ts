@@ -101,7 +101,11 @@ export async function buildControlServer(
     const parsed = ToggleSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
     const session = sessions.get(request.params.id);
-    await session.setRecording(parsed.data.enabled);
+    try {
+      await session.setRecording(parsed.data.enabled);
+    } catch (err) {
+      return reply.code(409).send({ error: (err as Error).message });
+    }
     return describe(session);
   });
 

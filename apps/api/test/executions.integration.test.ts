@@ -304,3 +304,43 @@ describe("internal notifications", () => {
     expect(await ctx.prisma.notification.count()).toBe(1);
   });
 });
+
+describe("a failed enqueue must not leave a phantom execution", () => {
+  it("marks the execution failed and reports 503 when the queue rejects the job", async () => {
+    const workflow = await readyWorkflow("Queue down");
+
+    // Simulate Redis being unavailable at the moment the job is enqueued.
+    const original = ctx.queue.enqueueNow;
+    ctx.queue.enqueueNow = async () => {
+      throw new Error("Redis connection lost");
+    };
+
+    try {
+      const response = await ctx.app.inject({
+        method: "POST",
+        url: `/api/workflows/${workflow.id}/executions`,
+        headers: { cookie: user.cookie }
+      });
+
+      // The caller must learn the run did not start.
+      expect(response.statusCode).toBe(503);
+
+      // No execution may be left sitting in `queued`: it would never run and
+      // never fail, showing up forever as pending in the UI.
+      const stuck = await ctx.prisma.execution.findMany({
+        where: { workflowId: workflow.id, status: "queued" }
+      });
+      expect(stuck, "no execution may stay queued after a failed enqueue").toHaveLength(0);
+
+      const failed = await ctx.prisma.execution.findMany({
+        where: { workflowId: workflow.id }
+      });
+      expect(failed).toHaveLength(1);
+      expect(failed[0].status).toBe("failed");
+      expect(failed[0].errorMessage).toMatch(/enqueue/i);
+      expect(failed[0].finishedAt).not.toBeNull();
+    } finally {
+      ctx.queue.enqueueNow = original;
+    }
+  });
+});

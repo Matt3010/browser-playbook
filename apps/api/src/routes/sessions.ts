@@ -244,6 +244,21 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
     });
 
     /**
+     * Discards everything recorded so far. This is the way out when a closing
+     * action has been captured and the user wants to record the flow again.
+     */
+    scoped.delete<{ Params: { id: string } }>("/:id/recording", async (request, reply) => {
+      const { userId } = currentUser(request);
+      try {
+        await loadOwnedSession(userId, request.params.id);
+        return await app.worker.clearRecording(request.params.id);
+      } catch (err) {
+        const status = err instanceof WorkerHttpError ? err.statusCode : 503;
+        return reply.code(status).send({ error: (err as Error).message });
+      }
+    });
+
+    /**
      * Persists the credentials captured during recording, encrypted. Called
      * before saving the steps so that {{credentials.x}} references resolve.
      */

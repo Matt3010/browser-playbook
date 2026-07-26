@@ -270,6 +270,59 @@ test.describe("step execution", () => {
     ).toBe("completed");
   });
 
+  test("survives a site that redirects itself during the navigation", async () => {
+    // /redirecting sends the browser to /elements as soon as it loads, which makes
+    // Playwright's goto report "interrupted by another navigation".
+    const workflow = await client.createWorkflow(
+      `Redirect durante goto ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/redirecting`
+    );
+
+    await client.putSteps(workflow.id, [
+      step({
+        type: "goto",
+        name: "Vai alla pagina che redirige",
+        value: `${TEST_WEB_INTERNAL_URL}/redirecting`
+      }),
+      step({
+        type: "assertVisible",
+        name: "Verifica di essere arrivato agli elementi",
+        selector: sel("id", "text-input")
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+
+    expect(
+      execution.status,
+      `execution failed: ${execution.errorMessage ?? ""}`
+    ).toBe("completed");
+    expect(execution.currentUrl).toContain("/elements");
+
+    // Whether the redirect lands before or after domcontentloaded is up to the
+    // browser's timing, so only the outcome is asserted here: the workflow must
+    // not fail either way. The "interrupted by another navigation" branch itself
+    // is covered deterministically by the unit tests in
+    // apps/worker/src/runner/navigation.test.ts.
+    const messages = (execution.logs ?? []).map((l) => l.message).join("\n");
+    expect(messages).toContain("Step 2/2");
+  });
+
+  test("a session starts even when the start page redirects itself", async () => {
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/redirecting`);
+    try {
+      expect(session.state).toBe("ready");
+      await expect
+        .poll(async () => (await client.getSession(session.sessionId)).currentUrl, {
+          timeout: 30_000
+        })
+        .toContain("/elements");
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
   test("fills a field inside a same-origin iframe", async () => {
     const workflow = await client.createWorkflow(
       `Iframe ${Date.now()}`,

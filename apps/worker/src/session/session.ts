@@ -19,6 +19,7 @@ import {
 import type { SessionSlot } from "./allocator";
 import { recorderBrowserScript } from "../recorder/browser-script";
 import { buildHighlightCss, DEFAULT_RECORDER_COLORS } from "../recorder/highlight-css";
+import { gotoTolerantOfRedirects } from "../runner/navigation";
 
 const TOOLTIP_ID = "__recorder_tooltip__";
 
@@ -225,7 +226,10 @@ export class BrowserSession {
     const initial = this.context.pages()[0] ?? (await this.context.newPage());
     this.registerPage(initial, "main");
 
-    await initial.goto(this.startUrl, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    // A site that redirects itself on load must not prevent the session from starting.
+    await gotoTolerantOfRedirects(initial, this.startUrl, 45_000, (message) =>
+      this.log.warn(message)
+    );
     await this.applyConfigToAllPages();
   }
 
@@ -401,17 +405,26 @@ export class BrowserSession {
    * never happens while recording.
    */
   async setArmedFinal(enabled: boolean): Promise<void> {
-    if (enabled && !this.recording) {
-      throw new Error("Start recording before arming the closing action");
-    }
+    // The more specific reason first: once a closing action exists, whether
+    // recording is running is beside the point.
     if (enabled && this.actions.some((a) => a.isFinal)) {
       throw new Error("This recording already has a closing action");
+    }
+    if (enabled && !this.recording) {
+      throw new Error("Start recording before arming the closing action");
     }
     this.armedFinal = enabled;
     await this.applyConfigToAllPages();
   }
 
   async setRecording(enabled: boolean): Promise<void> {
+    if (enabled && this.actions.some((a) => a.isFinal)) {
+      // Anything recorded now would come after the closing action, which can only
+      // be the last step, so the workflow could never be saved.
+      throw new Error(
+        "This recording is closed by a closing action; delete it before recording more steps"
+      );
+    }
     if (enabled && !this.recording) {
       this.recording = true;
       // Seed the workflow with the page the user starts from, so a replay does
@@ -500,8 +513,11 @@ export class BrowserSession {
     };
   }
 
+  /** Discards the recorded actions, which also unlocks recording again. */
   clearRecording(): void {
     this.actions.length = 0;
+    this.armedFinal = false;
+    void this.applyConfigToAllPages().catch(() => undefined);
   }
 
   // ---- navigation ---------------------------------------------------------
@@ -509,7 +525,7 @@ export class BrowserSession {
   async navigate(url: string): Promise<void> {
     const page = this.getActivePage();
     if (!page) throw new Error("Session has no open page");
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    await gotoTolerantOfRedirects(page, url, 45_000, (message) => this.log.warn(message));
     await this.applyConfigToPage(page);
   }
 

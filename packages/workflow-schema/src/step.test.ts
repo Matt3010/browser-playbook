@@ -188,3 +188,45 @@ describe("closing action placement", () => {
     expect(findFinalStep([goto(), click()])).toBeUndefined();
   });
 });
+
+describe("closing action placement on unparsed input", () => {
+  // validateSteps receives raw JSON from the API, where optional fields may be
+  // absent. Placement must be decided on values after defaults are applied,
+  // otherwise a step that omits `enabled` looks disabled and the invariant is
+  // bypassed.
+  it("rejects a closing action followed by a step that omits enabled", () => {
+    const result = validateSteps([
+      {
+        id: randomUUID(),
+        type: "click",
+        name: "Azione finale",
+        selector: labelSelector,
+        timeoutMs: 10000,
+        isFinal: true
+      },
+      {
+        id: randomUUID(),
+        type: "click",
+        name: "Step successivo senza enabled",
+        selector: labelSelector,
+        timeoutMs: 10000
+      }
+    ]);
+    expect(result.valid).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/must be the last enabled step/);
+  });
+
+  it("rejects two closing actions given as raw input", () => {
+    const raw = (name: string) => ({
+      id: randomUUID(),
+      type: "click",
+      name,
+      selector: labelSelector,
+      timeoutMs: 10000,
+      isFinal: true
+    });
+    const result = validateSteps([raw("Prima finale"), raw("Seconda finale")]);
+    expect(result.valid).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/only one closing action/);
+  });
+});

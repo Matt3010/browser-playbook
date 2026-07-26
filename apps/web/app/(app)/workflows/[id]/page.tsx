@@ -193,6 +193,18 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     });
   }
 
+  /** Discards everything recorded so far, unlocking recording again. */
+  async function clearRecording() {
+    if (!session) return;
+    await run("clear", async () => {
+      await api.del(`/sessions/${session.sessionId}/recording`);
+      setSteps([]);
+      setDirty(true);
+      setSession({ ...session, armedFinal: false, recording: false });
+      log("Registrazione azzerata");
+    });
+  }
+
   async function toggleHighlight() {
     if (!session) return;
     await run("highlight", async () => {
@@ -360,6 +372,15 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
               data-testid="arm-final"
             >
               {session.armedFinal ? "Armata: clicca il bottone finale" : "Azione finale"}
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={clearRecording}
+              disabled={busy !== null}
+              title="Scarta gli step registrati in questa sessione"
+              data-testid="clear-recording"
+            >
+              Azzera
             </button>
             <button className="btn-secondary" onClick={toggleHighlight} disabled={busy !== null} data-testid="toggle-highlight">
               Evidenzia: {session.highlight ? "on" : "off"}

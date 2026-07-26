@@ -137,7 +137,11 @@ export function validateSteps(input: unknown): StepValidationResult {
     }
   });
   if (errors.length === 0) {
-    errors.push(...validateFinalStepPlacement(input as Step[]));
+    // Placement depends on `enabled` and `isFinal`, which are optional in the raw
+    // payload. Validating before defaults are applied would let a step that omits
+    // `enabled` look disabled and slip past the invariant.
+    const parsed = input.map((step) => StepSchema.parse(step));
+    errors.push(...validateFinalStepPlacement(parsed));
   }
   return { valid: errors.length === 0, errors };
 }
