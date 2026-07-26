@@ -130,6 +130,22 @@ These are the classes of defect this codebase actually produced, so look here fi
   literal text — a failed login every run, and enough of them lock the account.
   Worse, `value.includes("{{")` was used to *skip* the `goto` URL and `wait`
   duration checks. `StepSchema` now refuses a placeholder that is not a reference.
+- **The editor could build a list the server refuses.** `addWait`/`addAssertion`
+  appended, and the move arrows swapped freely, so a recorded closing action stopped
+  being last and Save answered "Invalid steps" with no obvious repair. A rule the
+  server enforces has to be enforced by the UI that composes the payload, not only
+  reported after the fact.
+- **Clearing a cookie is not logging out.** The token stayed valid for its whole
+  seven days, and a password change did not invalidate it either. `tokenVersion` on
+  the user, bumped on logout and checked in `requireAuth`. Checking it also fixed a
+  quieter hole: `requireAuth` never read the database, so a token kept working for a
+  user that no longer existed.
+- **Nothing pruned history.** The only `deleteMany` in the project was the one for a
+  workflow's steps; execution logs, notifications and artifact files grew until the
+  workflow was deleted. `pruneOldHistory` runs at worker startup and daily. Two
+  traps it must avoid: an unfinished execution has `finishedAt: null` and must never
+  be read as infinitely old, and the artifact path stored on a row is data — pruning
+  stays inside the artifact root.
 - **A shared image drags its healthcheck along.** `migrate` was given the api image
   to avoid a second build, and inherited a healthcheck probing port 4000, which
   nothing serves there. It exits 0 but never turns healthy, so every service

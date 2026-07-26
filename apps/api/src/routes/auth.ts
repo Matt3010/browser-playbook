@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { hashPassword, verifyPassword, signAuthToken } from "@app/shared";
+import { verifyAuthToken, hashPassword, verifyPassword, signAuthToken } from "@app/shared";
 import { requireAuth, currentUser, SESSION_COOKIE } from "../auth";
 
 const CredentialsSchema = z.object({
@@ -32,7 +32,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       const user = await app.prisma.user.create({
         data: { email, passwordHash: await hashPassword(parsed.data.password) }
       });
-      const token = signAuthToken({ userId: user.id, email: user.email }, app.config.jwtSecret);
+      const token = signAuthToken(
+        { userId: user.id, email: user.email, tokenVersion: user.tokenVersion },
+        app.config.jwtSecret
+      );
       return reply
         .setCookie(SESSION_COOKIE, token, cookieOptions)
         .code(201)
@@ -54,14 +57,36 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       if (!user || !(await verifyPassword(parsed.data.password, user.passwordHash))) {
         return reply.code(401).send({ error: "Invalid credentials" });
       }
-      const token = signAuthToken({ userId: user.id, email: user.email }, app.config.jwtSecret);
+      const token = signAuthToken(
+        { userId: user.id, email: user.email, tokenVersion: user.tokenVersion },
+        app.config.jwtSecret
+      );
       return reply
         .setCookie(SESSION_COOKIE, token, cookieOptions)
         .send({ id: user.id, email: user.email });
     }
   );
 
-  app.post("/logout", async (_request, reply) => {
+  /**
+   * Ends the session on the server, not only in the browser.
+   *
+   * Bumping the owner's token version retires every token signed before now, so a
+   * copy of the cookie is worthless afterwards. Without it, clearing the cookie
+   * left a token that stayed valid for the rest of its seven days.
+   */
+  app.post("/logout", async (request, reply) => {
+    const token = request.cookies[SESSION_COOKIE];
+    if (token) {
+      try {
+        const payload = verifyAuthToken(token, app.config.jwtSecret);
+        await app.prisma.user.update({
+          where: { id: payload.userId },
+          data: { tokenVersion: { increment: 1 } }
+        });
+      } catch {
+        // An expired or forged token has nothing to revoke.
+      }
+    }
     return reply.clearCookie(SESSION_COOKIE, { path: "/" }).send({ ok: true });
   });
 

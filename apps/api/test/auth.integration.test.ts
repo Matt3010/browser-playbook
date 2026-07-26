@@ -186,3 +186,77 @@ describe("health endpoints", () => {
     ctx.worker.healthy = true;
   });
 });
+
+describe("logging out actually ends the session", () => {
+  // clearCookie only asks the browser to forget the token. The token itself stayed
+  // valid for its full seven days, so anyone holding a copy — and the user's own
+  // browser after a back button — could keep using it. A password change did not
+  // invalidate it either.
+  it("refuses a token that was used to log out", async () => {
+    const user = await registerUser(ctx.app, "logout@example.com");
+
+    const before = await ctx.app.inject({
+      method: "GET",
+      url: "/api/auth/me",
+      headers: { cookie: user.cookie }
+    });
+    expect(before.statusCode).toBe(200);
+
+    const loggedOut = await ctx.app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: { cookie: user.cookie }
+    });
+    expect(loggedOut.statusCode).toBe(200);
+
+    const after = await ctx.app.inject({
+      method: "GET",
+      url: "/api/auth/me",
+      headers: { cookie: user.cookie }
+    });
+    expect(after.statusCode, "the old token must no longer work").toBe(401);
+  });
+
+  it("does not touch anybody else's session", async () => {
+    const one = await registerUser(ctx.app, "one@example.com");
+    const two = await registerUser(ctx.app, "two@example.com");
+
+    await ctx.app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: { cookie: one.cookie }
+    });
+
+    const other = await ctx.app.inject({
+      method: "GET",
+      url: "/api/auth/me",
+      headers: { cookie: two.cookie }
+    });
+    expect(other.statusCode).toBe(200);
+  });
+
+  it("lets the same user log in again afterwards", async () => {
+    const user = await registerUser(ctx.app, "again@example.com");
+    await ctx.app.inject({
+      method: "POST",
+      url: "/api/auth/logout",
+      headers: { cookie: user.cookie }
+    });
+
+    const login = await ctx.app.inject({
+      method: "POST",
+      url: "/api/auth/login",
+      payload: { email: "again@example.com", password: "TestPassword123!" }
+    });
+    expect(login.statusCode).toBe(200);
+    const fresh = login.headers["set-cookie"];
+    const cookie = Array.isArray(fresh) ? fresh[0]!.split(";")[0]! : String(fresh).split(";")[0]!;
+
+    const me = await ctx.app.inject({
+      method: "GET",
+      url: "/api/auth/me",
+      headers: { cookie }
+    });
+    expect(me.statusCode).toBe(200);
+  });
+});

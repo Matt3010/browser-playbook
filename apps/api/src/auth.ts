@@ -13,12 +13,26 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply):
     await reply.code(401).send({ error: "Not authenticated" });
     return;
   }
+  let payload;
   try {
-    const payload = verifyAuthToken(token, request.server.config.jwtSecret);
-    request.authUser = { userId: payload.userId, email: payload.email };
+    payload = verifyAuthToken(token, request.server.config.jwtSecret);
   } catch {
     await reply.code(401).send({ error: "Invalid or expired session" });
+    return;
   }
+
+  // A valid signature is not enough: the owner may have logged out since, which
+  // retires every token issued before that point.
+  const user = await request.server.prisma.user.findUnique({
+    where: { id: payload.userId },
+    select: { tokenVersion: true }
+  });
+  if (!user || user.tokenVersion !== payload.tokenVersion) {
+    await reply.code(401).send({ error: "Session is no longer valid" });
+    return;
+  }
+
+  request.authUser = { userId: payload.userId, email: payload.email };
 }
 
 export function currentUser(request: FastifyRequest): { userId: string; email: string } {

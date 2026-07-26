@@ -4,6 +4,7 @@ import { createLogger } from "@app/shared";
 import { loadConfig } from "./config";
 import { SessionManager } from "./session/manager";
 import { buildControlServer } from "./control-server";
+import { pruneOldHistory } from "./retention";
 import {
   startQueueConsumer,
   reconcileMissedSchedules,
@@ -34,12 +35,32 @@ async function main(): Promise<void> {
     log.error({ err }, "Could not reconcile missed schedules")
   );
 
+  // History has no natural end: every run writes log lines and every failed run
+  // writes a screenshot. Pruned at startup and once a day after that.
+  const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  const prune = () =>
+    pruneOldHistory({
+      prisma,
+      log,
+      artifactDir: config.artifactDir,
+      retentionDays: config.historyRetentionDays
+    }).catch((err) => log.error({ err }, "Could not prune old history"));
+  let pruneTimer: NodeJS.Timeout | null = null;
+  if (config.historyRetentionDays > 0) {
+    await prune();
+    pruneTimer = setInterval(() => void prune(), PRUNE_INTERVAL_MS);
+    pruneTimer.unref();
+  } else {
+    log.warn("History pruning is disabled (HISTORY_RETENTION_DAYS=0)");
+  }
+
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
     log.info({ signal }, "Shutting down worker");
     try {
+      if (pruneTimer) clearInterval(pruneTimer);
       await server.close();
       await consumer.close();
       await sessions.closeAll();

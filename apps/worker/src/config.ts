@@ -23,6 +23,12 @@ const ConfigSchema = z.object({
   screenWidth: z.coerce.number().int().default(1280),
   screenHeight: z.coerce.number().int().default(800),
   artifactDir: z.string().default("/data/artifacts"),
+  /**
+   * Execution logs, notifications and artifact files older than this are pruned.
+   * Nothing removed them before, so they grew without a ceiling on a device whose
+   * storage is an SD card. 0 disables pruning.
+   */
+  historyRetentionDays: z.coerce.number().int().min(0).default(30),
   uploadFixtureDir: z.string().default("/data/uploads"),
   allowPrivateTargets: z.boolean().default(false),
   allowedTargetHosts: z.array(z.string()).default([]),
@@ -50,6 +56,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     screenWidth: env.SCREEN_WIDTH,
     screenHeight: env.SCREEN_HEIGHT,
     artifactDir: env.ARTIFACT_DIR,
+    historyRetentionDays: env.HISTORY_RETENTION_DAYS,
     uploadFixtureDir: env.UPLOAD_FIXTURE_DIR,
     allowPrivateTargets: env.ALLOW_PRIVATE_TARGETS === "true",
     allowedTargetHosts: (env.ALLOWED_TARGET_HOSTS ?? "")

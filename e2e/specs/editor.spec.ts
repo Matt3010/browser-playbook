@@ -184,6 +184,67 @@ test.describe("visual step editor", () => {
     );
   });
 
+  test("keeps the closing action last when a step is added", async ({ page }) => {
+    // The closing action is recorded without being performed and must stay last:
+    // nothing may depend on an effect nobody observed. The editor appended new
+    // steps to the end regardless, so recording a closing action and then adding a
+    // wait produced a list the server refuses — and the user had no way to fix it
+    // from the editor except by shuffling steps by hand.
+    await client.putSteps(workflowId, [
+      ...baseSteps(),
+      step({
+        type: "click",
+        name: "Conferma ordine",
+        isFinal: true,
+        selector: {
+          strategy: "css",
+          value: "button#confirm",
+          fallback: null,
+          pageId: "main",
+          frame: null
+        }
+      })
+    ]);
+    await page.reload();
+    await expect(page.getByTestId("step-final-3")).toBeVisible();
+
+    await page.getByTestId("add-wait").click();
+    await save(page);
+
+    const stored = await client.getWorkflow(workflowId);
+    expect(stored.steps).toHaveLength(5);
+    expect(
+      stored.steps[stored.steps.length - 1]!.isFinal,
+      "the closing action must still be last"
+    ).toBe(true);
+    expect(stored.steps[stored.steps.length - 2]!.type).toBe("wait");
+  });
+
+  test("refuses to move a step past the closing action", async ({ page }) => {
+    await client.putSteps(workflowId, [
+      ...baseSteps(),
+      step({
+        type: "click",
+        name: "Conferma ordine",
+        isFinal: true,
+        selector: {
+          strategy: "css",
+          value: "button#confirm",
+          fallback: null,
+          pageId: "main",
+          frame: null
+        }
+      })
+    ]);
+    await page.reload();
+    await expect(page.getByTestId("step-final-3")).toBeVisible();
+
+    // Moving the closing action up would put an ordinary step after it.
+    await expect(page.getByTestId("step-up-3")).toBeDisabled();
+    // And the step before it cannot be pushed past it.
+    await expect(page.getByTestId("step-down-2")).toBeDisabled();
+  });
+
   test("reports a validation error instead of saving an invalid step", async ({ page }) => {
     // An assertion with an empty selector value cannot be persisted.
     await page.getByTestId("add-assertion").click();

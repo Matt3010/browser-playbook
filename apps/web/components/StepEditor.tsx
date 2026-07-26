@@ -40,6 +40,34 @@ function describeSelector(selector: Selector | null): string {
   return `${selector.strategy}=${selector.value ?? ""}`;
 }
 
+/**
+ * A closing action is recorded without being performed and must stay the last step:
+ * nothing may depend on an effect nobody observed while recording. The server
+ * refuses a list that breaks this, so the editor must not be able to build one —
+ * appending a wait after a recorded closing action used to leave the user with a
+ * workflow that would not save and no obvious way to repair it.
+ */
+function trailingFinalIndex(steps: Step[]): number | null {
+  const last = steps.length - 1;
+  return last >= 0 && steps[last]?.isFinal ? last : null;
+}
+
+/** Where a newly added step goes: before a trailing closing action, else at the end. */
+export function insertionIndex(steps: Step[]): number {
+  return trailingFinalIndex(steps) ?? steps.length;
+}
+
+/** True when the step at this index may swap with its neighbour in that direction. */
+export function canMove(steps: Step[], index: number, direction: -1 | 1): boolean {
+  const target = index + direction;
+  if (target < 0 || target >= steps.length) return false;
+  // Moving the closing action up, or moving another step down past it, would both
+  // leave an ordinary step after it.
+  if (direction === -1 && steps[index]?.isFinal) return false;
+  if (direction === 1 && steps[target]?.isFinal) return false;
+  return true;
+}
+
 function newId(): string {
   return crypto.randomUUID();
 }
@@ -76,10 +104,17 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
   }
 
   function move(index: number, direction: -1 | 1) {
+    if (!canMove(steps, index, direction)) return;
     const target = index + direction;
-    if (target < 0 || target >= steps.length) return;
     const next = [...steps];
     [next[index], next[target]] = [next[target], next[index]];
+    onChange(next);
+  }
+
+  /** Adds a step at the only position that keeps the list valid. */
+  function insert(step: Step) {
+    const next = [...steps];
+    next.splice(insertionIndex(steps), 0, step);
     onChange(next);
   }
 
@@ -88,8 +123,7 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
   }
 
   function addWait() {
-    onChange([
-      ...steps,
+    insert(
       {
         id: newId(),
         type: "wait",
@@ -101,12 +135,11 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
         enabled: true,
         isFinal: false
       }
-    ]);
+    );
   }
 
   function addAssertion() {
-    onChange([
-      ...steps,
+    insert(
       {
         id: newId(),
         type: "assertVisible",
@@ -118,7 +151,7 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
         enabled: true,
         isFinal: false
       }
-    ]);
+    );
   }
 
   return (
@@ -198,8 +231,12 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
                     <button
                       className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
                       onClick={() => move(index, -1)}
-                      disabled={index === 0}
-                      title="Sposta su"
+                      disabled={!canMove(steps, index, -1)}
+                      title={
+                        step.isFinal
+                          ? "L'azione finale deve restare l'ultimo step"
+                          : "Sposta su"
+                      }
                       data-testid={`step-up-${index}`}
                     >
                       ↑
@@ -207,8 +244,12 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
                     <button
                       className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
                       onClick={() => move(index, 1)}
-                      disabled={index === steps.length - 1}
-                      title="Sposta giù"
+                      disabled={!canMove(steps, index, 1)}
+                      title={
+                        steps[index + 1]?.isFinal
+                          ? "L'azione finale deve restare l'ultimo step"
+                          : "Sposta giù"
+                      }
                       data-testid={`step-down-${index}`}
                     >
                       ↓

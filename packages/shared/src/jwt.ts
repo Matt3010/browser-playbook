@@ -3,6 +3,12 @@ import jwt from "jsonwebtoken";
 export interface AuthTokenPayload {
   userId: string;
   email: string;
+  /**
+   * The owner's token version at the time of signing. A logout bumps the stored
+   * version, which retires every token issued before it: clearing the cookie alone
+   * only asks the browser to forget a token that stays valid for a week.
+   */
+  tokenVersion: number;
 }
 
 export function signAuthToken(payload: AuthTokenPayload, secret: string, expiresIn = "7d"): string {

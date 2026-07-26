@@ -11,6 +11,10 @@ model User {
   id           String   @id @default(uuid())
   email        String   @unique
   passwordHash String
+  /// Incremented on logout so tokens issued before it stop being accepted.
+  /// clearCookie only asks the browser to forget the token; the token itself stays
+  /// valid for its whole lifetime unless something invalidates it server side.
+  tokenVersion Int      @default(0)
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
