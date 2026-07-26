@@ -366,6 +366,7 @@ ${summary}`
 </form>
 
 <p><a class="btn" id="download-link" href="/elements/download" download>Scarica file</a></p>
+<p><a class="btn" id="download-hostile-link" href="/elements/download-hostile" download>Scarica file con nome ostile</a></p>
 
 <h2>Iframe same-origin</h2>
 <iframe id="inner" title="Contenuto interno" src="/elements/frame"></iframe>`
@@ -406,6 +407,21 @@ ${summary}`
       .header("content-disposition", 'attachment; filename="sample.txt"')
       .type("text/plain")
       .send("contenuto-file-di-test\n")
+  );
+
+  /**
+   * Serves a download whose Content-Disposition tries to climb out of the
+   * directory the worker stores artifacts in. A site can always do this, so the
+   * runner must never build a path from this name.
+   */
+  app.get("/elements/download-hostile", async (_request, reply) =>
+    reply
+      .header(
+        "content-disposition",
+        'attachment; filename="../../../../tmp/pwned-by-download.txt"'
+      )
+      .type("text/plain")
+      .send("payload\n")
   );
 
   app.post("/elements/upload", async (request, reply) => {

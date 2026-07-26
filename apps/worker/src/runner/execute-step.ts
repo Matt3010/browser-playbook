@@ -4,6 +4,7 @@ import { assertSafeTargetUrl, renderTemplate, type TemplateContext } from "@app/
 import type { Step } from "@app/workflow-schema";
 import { resolveUnique } from "./locator";
 import { assertSafeLandedUrl, gotoTolerantOfRedirects } from "./navigation";
+import { safeDownloadPath } from "./artifact-path";
 import type { BrowserSession } from "../session/session";
 
 export interface StepExecutionContext {
@@ -226,7 +227,8 @@ export async function executeStep(step: Step, ctx: StepExecutionContext): Promis
         locator.click({ timeout: step.timeoutMs })
       ]);
       const filename = download.suggestedFilename();
-      const target = path.join(ctx.artifactDir, ctx.executionId, `download-${filename}`);
+      // The name comes from the visited site, so it must not be trusted as a path.
+      const target = safeDownloadPath(ctx.artifactDir, ctx.executionId, filename);
       await download.saveAs(target);
       await ctx.onArtifact({ type: "download", path: target });
       await ctx.log("info", `Downloaded ${filename}`);

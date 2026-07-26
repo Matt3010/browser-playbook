@@ -323,6 +323,42 @@ test.describe("step execution", () => {
     }
   });
 
+  test("a download cannot escape the artifact directory through its file name", async () => {
+    const workflow = await client.createWorkflow(
+      `Download ostile ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` }),
+      step({
+        type: "download",
+        name: "Scarica il file con nome ostile",
+        selector: sel("id", "download-hostile-link")
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+    expect(
+      execution.status,
+      `execution failed: ${execution.errorMessage ?? ""}`
+    ).toBe("completed");
+
+    const artifact = (execution.artifacts ?? []).find((a) => a.type === "download");
+    expect(artifact, "the download must still be stored").toBeTruthy();
+
+    // The property that matters: the file lives directly inside this execution's
+    // own directory, so nothing the site puts in the name can move it elsewhere.
+    // Playwright already replaces path separators in suggestedFilename(), so the
+    // guard in the runner is defence in depth rather than the only barrier; the
+    // raw hostile input is covered by apps/worker/src/runner/artifact-path.test.ts.
+    const directory = artifact!.path.slice(0, artifact!.path.lastIndexOf("/"));
+    expect(directory).toBe(`/data/artifacts/${started.id}`);
+    expect(artifact!.path).not.toContain("/tmp/");
+    expect(artifact!.path).not.toContain("/../");
+  });
+
   test("fills a field inside a same-origin iframe", async () => {
     const workflow = await client.createWorkflow(
       `Iframe ${Date.now()}`,
