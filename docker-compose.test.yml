@@ -102,6 +102,10 @@ services:
     build:
       context: .
       dockerfile: docker/browser/Dockerfile
+    # Chromium re-parents children to PID 1 when the browser closes, and Node only
+    # reaps what it spawned itself. Without an init process they pile up as zombies,
+    # a few per session, until the process table is exhausted.
+    init: true
     environment:
       NODE_ENV: production
       WORKER_PORT: 5000

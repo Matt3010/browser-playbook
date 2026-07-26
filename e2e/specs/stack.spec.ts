@@ -1,6 +1,11 @@
 import { test, expect } from "@playwright/test";
 import { execFileSync } from "child_process";
-import { AppClient, APP_BASE_URL, TEST_WEB_PUBLIC_URL } from "../helpers/app-client";
+import {
+  AppClient,
+  APP_BASE_URL,
+  TEST_WEB_INTERNAL_URL,
+  TEST_WEB_PUBLIC_URL
+} from "../helpers/app-client";
 
 const COMPOSE_FILE = process.env.COMPOSE_TEST_FILE ?? "docker-compose.test.yml";
 
@@ -79,6 +84,38 @@ test.describe("stack health", () => {
       if (service === "reverse-proxy" || service === "test-web") continue;
       expect(ports, `${service} must not publish any port`).toEqual([]);
     }
+  });
+
+  test("closing browser sessions does not leave zombie processes behind", async () => {
+    // Chromium's children are re-parented to the worker process when the browser
+    // closes. Node only reaps what it spawned itself, so without an init process
+    // as PID 1 every session leaves a handful of unreaped entries in the process
+    // table, which on a long-running host slowly consumes PIDs.
+    const client = new AppClient();
+    await client.login();
+
+    for (let i = 0; i < 3; i += 1) {
+      const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+      await client.closeSession(session.sessionId);
+    }
+
+    const zombies = execFileSync(
+      "docker",
+      [
+        "compose",
+        "-f",
+        COMPOSE_FILE,
+        "exec",
+        "-T",
+        "worker",
+        "sh",
+        "-c",
+        "ps -eo stat --no-headers | grep -c '^Z' || true"
+      ],
+      { encoding: "utf8", cwd: process.cwd().replace(/[\/]e2e$/, "") }
+    ).trim();
+
+    expect(Number(zombies), `worker left ${zombies} zombie processes`).toBe(0);
   });
 
   test("the seeded user can log in and unauthenticated access is refused", async () => {

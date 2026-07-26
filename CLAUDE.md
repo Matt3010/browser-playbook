@@ -75,6 +75,12 @@ These are the classes of defect this codebase actually produced, so look here fi
   independently of `attempts`. For this product that means replaying a workflow
   that already acted on the target site, so `maxStalledCount: 0` is deliberate.
   Check what a dependency does on failure, not only on success.
+- **Prefix checks without a separator.** `startsWith(root)` accepts a sibling
+  directory that shares the prefix (`<root>-evil`) and the root itself. Always
+  `startsWith(root + path.sep)`.
+- **PID 1 in a container reaps nothing.** Chromium re-parents children to the
+  worker process, and Node only reaps what it spawned, so every session left a
+  few zombies. Services that spawn foreign process trees need `init: true`.
 - **Files outlive their rows.** Cascading deletes clear the database and leave the
   volume untouched; artifacts had to be removed explicitly, restricted to the
   artifact root.
