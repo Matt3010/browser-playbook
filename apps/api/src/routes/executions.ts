@@ -302,8 +302,11 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
     });
     if (!artifact) return reply.code(404).send({ error: "Artifact not found" });
 
+    // The separator matters: without it a sibling directory sharing the prefix
+    // (`<root>-evil`) satisfies the check, and so does the root itself.
+    const root = path.resolve(app.config.artifactDir);
     const resolved = path.resolve(artifact.path);
-    if (!resolved.startsWith(path.resolve(app.config.artifactDir))) {
+    if (!resolved.startsWith(root + path.sep)) {
       return reply.code(400).send({ error: "Artifact path outside the artifact directory" });
     }
     try {

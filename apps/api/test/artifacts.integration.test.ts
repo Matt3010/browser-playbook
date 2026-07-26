@@ -129,6 +129,48 @@ describe("artifact files on disk", () => {
     expect(await ctx.prisma.workflow.count()).toBe(0);
   });
 
+  it("refuses to serve a path in a sibling directory with the same prefix", async () => {
+    // `startsWith(root)` without a separator lets `<root>-evil` through, because
+    // the string starts with the root. Not reachable today (the worker writes the
+    // paths) but the containment check must hold on its own.
+    const sibling = `${artifactDir}-evil`;
+    await mkdir(sibling, { recursive: true });
+    const outside = path.join(sibling, "secret.png");
+    await writeFile(outside, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+    const workflow = await createWorkflow(ctx.app, user.cookie);
+    const execution = await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, status: "failed" }
+    });
+    const artifact = await ctx.prisma.artifact.create({
+      data: { executionId: execution.id, type: "screenshot", path: outside }
+    });
+
+    const response = await ctx.app.inject({
+      method: "GET",
+      url: `/api/artifacts/${artifact.id}/file`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("serves nothing for the artifact directory itself", async () => {
+    const workflow = await createWorkflow(ctx.app, user.cookie);
+    const execution = await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, status: "failed" }
+    });
+    const artifact = await ctx.prisma.artifact.create({
+      data: { executionId: execution.id, type: "screenshot", path: artifactDir }
+    });
+
+    const response = await ctx.app.inject({
+      method: "GET",
+      url: `/api/artifacts/${artifact.id}/file`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(400);
+  });
+
   it("never deletes anything outside the artifact directory", async () => {
     const outside = path.join(artifactDir, "..", "must-survive.txt");
     await writeFile(outside, "important");
