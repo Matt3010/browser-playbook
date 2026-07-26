@@ -3,7 +3,12 @@ import { stat } from "fs/promises";
 import path from "path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { isRunnableStepList, StepSchema } from "@app/workflow-schema";
+import {
+  describeMissingReferences,
+  findMissingReferences,
+  isRunnableStepList,
+  StepSchema
+} from "@app/workflow-schema";
 import { requireAuth, currentUser } from "../auth";
 import { loadOwnedWorkflow, loadOwnedExecution } from "../ownership";
 
@@ -14,6 +19,21 @@ const ListQuerySchema = z.object({
 
 /** Artifacts live on a shared volume; only paths inside it may be served. */
 const ARTIFACT_ROOT = process.env.ARTIFACT_DIR ?? "/data/artifacts";
+
+/**
+ * Loads the names of the values a workflow can reference. Kept separate so both
+ * the immediate-run and the scheduling route check the same thing.
+ */
+async function availableValues(app: FastifyInstance, userId: string) {
+  const rows = await app.prisma.credential.findMany({
+    where: { userId },
+    select: { name: true, kind: true }
+  });
+  return {
+    variables: rows.filter((r) => r.kind === "variable").map((r) => r.name),
+    credentials: rows.filter((r) => r.kind === "secret").map((r) => r.name)
+  };
+}
 
 export async function executionRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireAuth);
@@ -45,6 +65,17 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
     );
     if (!isRunnableStepList(steps)) {
       return reply.code(409).send({ error: "Workflow has no enabled steps to run" });
+    }
+
+    // Refuse before starting a browser: a reference to a deleted credential would
+    // otherwise only surface halfway through the run, after earlier steps already
+    // had an effect on the target site.
+    const missing = findMissingReferences(steps, await availableValues(app, userId));
+    if (missing.length > 0) {
+      return reply.code(409).send({
+        error: `The workflow references values that do not exist: ${describeMissingReferences(missing)}`,
+        missingReferences: missing
+      });
     }
 
     const execution = await app.prisma.execution.create({

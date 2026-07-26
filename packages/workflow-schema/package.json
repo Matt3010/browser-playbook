@@ -10,7 +10,8 @@
     "test:unit": "vitest run"
   },
   "dependencies": {
-    "zod": "3.23.8"
+    "zod": "3.23.8",
+    "@app/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "22.7.4",

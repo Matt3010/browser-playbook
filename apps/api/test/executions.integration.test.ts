@@ -344,3 +344,111 @@ describe("a failed enqueue must not leave a phantom execution", () => {
     }
   });
 });
+
+describe("references to values that do not exist", () => {
+  async function workflowUsing(template: string) {
+    const workflow = await createWorkflow(ctx.app, user.cookie, `Uses ${template}`);
+    await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: {
+        steps: [
+          gotoStep("http://test-web:3001/login"),
+          {
+            id: `00000000-0000-4000-8000-${String(Date.now()).slice(-12)}`,
+            type: "fill",
+            name: "Inserisci Password",
+            pageId: "main",
+            selector: {
+              strategy: "label",
+              value: "Password",
+              fallback: null,
+              pageId: "main",
+              frame: null
+            },
+            value: template,
+            timeoutMs: 10000,
+            enabled: true
+          }
+        ]
+      }
+    });
+    return workflow;
+  }
+
+  it("refuses an immediate run instead of failing halfway through it", async () => {
+    const workflow = await workflowUsing("{{credentials.password}}");
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/executions`,
+      headers: { cookie: user.cookie }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain("credentials.password");
+    expect(response.json().missingReferences[0]).toMatchObject({
+      kind: "credentials",
+      name: "password"
+    });
+    // Nothing was queued, so no browser is started for a run that cannot work.
+    expect(await ctx.prisma.execution.count()).toBe(0);
+  });
+
+  it("refuses to schedule a run that could not succeed", async () => {
+    const workflow = await workflowUsing("{{credentials.password}}");
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/schedules`,
+      headers: { cookie: user.cookie },
+      payload: {
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        timezone: "Europe/Rome"
+      }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain("credentials.password");
+    expect(await ctx.prisma.schedule.count()).toBe(0);
+    expect(await ctx.prisma.execution.count()).toBe(0);
+  });
+
+  it("accepts the run once the credential exists", async () => {
+    const workflow = await workflowUsing("{{credentials.password}}");
+
+    await ctx.app.inject({
+      method: "POST",
+      url: "/api/credentials",
+      headers: { cookie: user.cookie },
+      payload: { name: "password", value: "TestPassword123!", kind: "secret" }
+    });
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/executions`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(202);
+  });
+
+  it("does not accept a variable in place of a credential", async () => {
+    const workflow = await workflowUsing("{{credentials.password}}");
+
+    // Same name, wrong namespace.
+    await ctx.app.inject({
+      method: "POST",
+      url: "/api/credentials",
+      headers: { cookie: user.cookie },
+      payload: { name: "password", value: "plain", kind: "variable" }
+    });
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/executions`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(409);
+  });
+});

@@ -234,7 +234,7 @@ test.describe("stop at the first error", () => {
     expect(messages).toMatch(/used the recorded fallback/i);
   });
 
-  test("an unknown template reference fails the step instead of sending an empty value", async () => {
+  test("a reference to a value that does not exist is refused before anything runs", async () => {
     const workflow = await client.createWorkflow(
       `Variabile mancante ${Date.now()}`,
       `${TEST_WEB_INTERNAL_URL}/elements`
@@ -254,11 +254,21 @@ test.describe("stop at the first error", () => {
       badTemplate
     ]);
 
-    const started = await client.runNow(workflow.id);
-    const execution = await client.waitForExecution(started.id);
+    // Caught up front rather than halfway through the run: no browser is started
+    // and no step has had a chance to touch the target site.
+    const response = await client.request("POST", `/api/workflows/${workflow.id}/executions`);
+    expect(response.status).toBe(409);
+    expect(response.text).toContain("variables.non_esiste");
+    expect(response.text).toContain("Inserisci variabile inesistente");
 
-    expect(execution.status).toBe("failed");
-    expect(execution.failedStepId).toBe(badTemplate.id);
-    expect(execution.errorMessage).toMatch(/Unknown template reference/);
+    expect(await client.listExecutions(workflow.id)).toHaveLength(0);
+
+    // Scheduling it is refused for the same reason.
+    const scheduled = await client.request(
+      "POST",
+      `/api/workflows/${workflow.id}/schedules`,
+      { runAt: new Date(Date.now() + 60_000).toISOString(), timezone: "Europe/Rome" }
+    );
+    expect(scheduled.status).toBe(409);
   });
 });

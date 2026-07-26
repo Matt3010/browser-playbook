@@ -239,6 +239,9 @@ importers:
 
   packages/workflow-schema:
     dependencies:
+      '@app/shared':
+        specifier: workspace:*
+        version: link:../shared
       zod:
         specifier: 3.23.8
         version: 3.23.8
