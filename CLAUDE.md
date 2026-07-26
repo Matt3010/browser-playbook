@@ -75,6 +75,11 @@ These are the classes of defect this codebase actually produced, so look here fi
   independently of `attempts`. For this product that means replaying a workflow
   that already acted on the target site, so `maxStalledCount: 0` is deliberate.
   Check what a dependency does on failure, not only on success.
+- **Guessing anywhere, not just on selectors.** The selector rules stop on
+  ambiguity, but page selection silently fell back to whatever page was active
+  when the recorded one was not open — running the action against the wrong
+  document and reporting success. Every "which one do I act on" decision needs
+  the same rule: resolve exactly, or stop.
 - **Prefix checks without a separator.** `startsWith(root)` accepts a sibling
   directory that shares the prefix (`<root>-evil`) and the root itself. Always
   `startsWith(root + path.sep)`.

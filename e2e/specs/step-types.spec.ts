@@ -359,6 +359,39 @@ test.describe("step execution", () => {
     expect(artifact!.path).not.toContain("/../");
   });
 
+  test("refuses to act on a different page when the recorded one is not open", async () => {
+    // The selector rules never guess; page selection must not either. A step
+    // recorded on a tab that is not open at replay time would otherwise run
+    // against whatever page happens to be active, clicking the wrong thing.
+    const workflow = await client.createWorkflow(
+      `Pagina mancante ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+
+    const onMissingTab = step({
+      type: "fill",
+      name: "Scrivi in una tab mai aperta",
+      value: "non deve finire sulla pagina principale",
+      timeoutMs: 5000,
+      pageId: "tab-7",
+      selector: sel("id", "text-input", { pageId: "tab-7" })
+    });
+
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` }),
+      onMissingTab
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+
+    expect(execution.status).toBe("failed");
+    expect(execution.failedStepId).toBe(onMissingTab.id);
+    expect(execution.errorMessage).toContain("tab-7");
+    // The message must help: it says which pages are actually open.
+    expect(execution.errorMessage).toMatch(/main/);
+  });
+
   test("fills a field inside a same-origin iframe", async () => {
     const workflow = await client.createWorkflow(
       `Iframe ${Date.now()}`,

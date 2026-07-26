@@ -36,10 +36,26 @@ function renderValue(step: Step, ctx: StepExecutionContext): string {
   }
 }
 
+/**
+ * Resolves the page a step targets.
+ *
+ * If the recorded page is not open the step fails, exactly as an ambiguous
+ * selector does. Falling back to whatever page happens to be active would run the
+ * action against the wrong document — clicking the wrong button, typing into the
+ * wrong form — and report success.
+ */
 function pageFor(step: Step, ctx: StepExecutionContext): Page {
-  const page = ctx.session.getPage(step.pageId) ?? ctx.session.getActivePage();
-  if (!page) throw new StepExecutionError(`No open page for pageId '${step.pageId}'`);
-  return page;
+  const page = ctx.session.getPage(step.pageId);
+  if (page) return page;
+
+  const open = ctx.session
+    .listPages()
+    .map((p) => p.pageId)
+    .join(", ");
+  throw new StepExecutionError(
+    `Step '${step.name}' targets page '${step.pageId}', which is not open ` +
+      `(open pages: ${open || "none"}). The workflow stops instead of acting on another page.`
+  );
 }
 
 /**
