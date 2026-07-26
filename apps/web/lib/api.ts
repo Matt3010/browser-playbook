@@ -163,10 +163,20 @@ export interface SessionInfo {
   vncPath?: string;
 }
 
+export type StepVerificationStatus = "ok" | "ambiguous" | "not-found" | "unchecked";
+
+export interface StepVerification {
+  status: StepVerificationStatus;
+  message?: string;
+  usedFallback?: boolean;
+}
+
 export interface RecordingResult {
   actions: unknown[];
   steps: Step[];
   credentials: Array<{ name: string }>;
   credentialValues?: Array<{ name: string; value: string }>;
   skipped: number;
+  /** Aligned with `steps`: whether each one resolves on the live page. */
+  verifications: StepVerification[];
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Selector, Step } from "@/lib/api";
+import type { Selector, Step, StepVerification } from "@/lib/api";
 
 const STEP_TYPES = [
   "goto",
@@ -47,9 +47,18 @@ function newId(): string {
 interface StepEditorProps {
   steps: Step[];
   onChange: (steps: Step[]) => void;
+  /** Aligned with `steps`: whether each one resolves on the live page. */
+  verifications?: StepVerification[];
 }
 
-export function StepEditor({ steps, onChange }: StepEditorProps) {
+const VERIFICATION_LABEL: Record<string, { text: string; className: string }> = {
+  ok: { text: "verificato", className: "bg-green-100 text-green-700" },
+  ambiguous: { text: "selector ambiguo", className: "bg-red-100 text-red-700" },
+  "not-found": { text: "non trovato", className: "bg-red-100 text-red-700" },
+  unchecked: { text: "non verificato", className: "bg-slate-100 text-slate-600" }
+};
+
+export function StepEditor({ steps, onChange, verifications = [] }: StepEditorProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
 
   function update(id: string, patch: Partial<Step>) {
@@ -150,6 +159,22 @@ export function StepEditor({ steps, onChange }: StepEditorProps) {
                     >
                       {step.name}
                     </span>
+                    {(() => {
+                      const check = verifications[index];
+                      if (!check) return null;
+                      const label = VERIFICATION_LABEL[check.status];
+                      if (!label) return null;
+                      return (
+                        <span
+                          className={`badge ${label.className}`}
+                          title={check.message ?? "Il selector risolve su un solo elemento"}
+                          data-testid={`step-verification-${index}`}
+                          data-status={check.status}
+                        >
+                          {label.text}
+                        </span>
+                      );
+                    })()}
                     {step.isFinal ? (
                       <span
                         className="badge bg-amber-100 text-amber-800"

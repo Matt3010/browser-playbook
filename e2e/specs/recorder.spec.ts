@@ -626,3 +626,102 @@ test.describe("credentials recorded on different sites", () => {
     expect(execution.currentUrl).toContain("/dashboard");
   });
 });
+
+test.describe("verifying a recording as it happens", () => {
+  let client: AppClient;
+
+  test.beforeEach(async () => {
+    await resetTestWeb();
+    client = new AppClient();
+    await client.login();
+  });
+
+  test("marks a step whose selector really resolves as verified", async () => {
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, {
+        kind: "fill",
+        selector: "#text-input",
+        value: "testo"
+      });
+
+      await expect
+        .poll(
+          async () => {
+            const recording = await client.getRecording(session.sessionId);
+            return recording.verifications?.[recording.steps.length - 1]?.status;
+          },
+          { timeout: 20_000 }
+        )
+        .toBe("ok");
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
+  test("catches a selector that stops being unique the moment it is used", async () => {
+    // The button clones itself when clicked, which is what a re-rendering list or
+    // an "add another" control does. The recorder saw one element and recorded a
+    // name-based selector; a moment later there are two, so the step would stop
+    // the workflow at run time. Checking against the page right after the
+    // interaction is what surfaces it now instead of at three in the morning.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, { kind: "click", selector: ".clone-me" });
+
+      await expect
+        .poll(
+          async () => {
+            const recording = await client.getRecording(session.sessionId);
+            return (recording.verifications ?? []).map((v) => v.status);
+          },
+          { timeout: 20_000 }
+        )
+        .toContain("ambiguous");
+
+      const recording = await client.getRecording(session.sessionId);
+      const failed = (recording.verifications ?? []).find((v) => v.status === "ambiguous");
+      expect(failed!.message).toMatch(/matches \d+ elements/);
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
+  test("does not cry wolf when a click navigates away", async () => {
+    // The click that submits the login moves the page before the check can run.
+    // Reporting that as a broken step would make the whole feature untrustworthy.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/login`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, {
+        kind: "fill",
+        selector: "#email",
+        value: "test@example.com"
+      });
+      await client.interact(session.sessionId, {
+        kind: "fill",
+        selector: "#password",
+        value: "TestPassword123!"
+      });
+      await client.interact(session.sessionId, { kind: "click", selector: "button[type=submit]" });
+
+      await expect
+        .poll(async () => (await client.getSession(session.sessionId)).currentUrl, {
+          timeout: 30_000
+        })
+        .toContain("/dashboard");
+
+      const recording = await client.getRecording(session.sessionId);
+      const statuses = (recording.verifications ?? []).map((v) => v.status);
+      // Nothing may be reported as broken: the fills resolved, and the click is
+      // simply unverifiable once the page has moved on.
+      expect(statuses).not.toContain("ambiguous");
+      expect(statuses).not.toContain("not-found");
+      expect(statuses).toContain("ok");
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+});

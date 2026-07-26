@@ -4,6 +4,7 @@ import path from "path";
 import { chromium, type BrowserContext, type Page } from "playwright";
 import {
   actionsToSteps,
+  actionToStep,
   RecordedActionSchema,
   type RecordedAction,
   type Step
@@ -20,6 +21,7 @@ import type { SessionSlot } from "./allocator";
 import { recorderBrowserScript } from "../recorder/browser-script";
 import { buildHighlightCss, DEFAULT_RECORDER_COLORS } from "../recorder/highlight-css";
 import { assertSafeLandedUrl, gotoTolerantOfRedirects } from "../runner/navigation";
+import { resolveUnique } from "../runner/locator";
 
 const TOOLTIP_ID = "__recorder_tooltip__";
 
@@ -52,6 +54,20 @@ interface TrackedPage {
   page: Page;
 }
 
+/**
+ * Result of checking a recorded step against the live page, using the very same
+ * resolution the runner will use. Anything else would only verify a second
+ * approximation of the runner rather than the runner itself.
+ */
+export type StepVerification =
+  | { status: "ok"; usedFallback: boolean }
+  | { status: "ambiguous"; message: string }
+  | { status: "not-found"; message: string }
+  | { status: "unchecked"; message: string };
+
+/** Kept short so recording stays responsive while the user is working. */
+const VERIFY_TIMEOUT_MS = 1500;
+
 /** Milliseconds after an interaction during which a navigation is considered
  *  a consequence of that interaction, and therefore not recorded separately. */
 const NAVIGATION_DEBOUNCE_MS = 1500;
@@ -79,6 +95,8 @@ export class BrowserSession {
   private activePageId = "main";
   private nextTabIndex = 0;
   private readonly actions: RecordedAction[] = [];
+  /** Verification of each recorded action, by its index in `actions`. */
+  private readonly verifications = new Map<number, StepVerification>();
   private lastActionAt = 0;
   private timeoutTimer: NodeJS.Timeout | null = null;
   private closing = false;
@@ -387,12 +405,60 @@ export class BrowserSession {
       this.log.warn({ issues: parsed.error.issues }, "Discarded malformed recorded action");
       return;
     }
-    this.pushAction(parsed.data);
+    this.pushAction(parsed.data, page);
   }
 
-  private pushAction(action: RecordedAction): void {
+  /**
+   * Checks that the selector just recorded resolves to exactly one element, right
+   * now, on the page the action happened on. Doing it here is what makes the
+   * answer trustworthy: the page is in exactly the state the step expects, which
+   * no later replay can reproduce.
+   */
+  private async verifyAction(index: number, action: RecordedAction, page: Page): Promise<void> {
+    const urlBefore = safeUrl(page);
+    const converted = actionToStep(action);
+    if (!converted?.step.selector) {
+      this.verifications.set(index, {
+        status: "unchecked",
+        message: "This step does not target an element"
+      });
+      return;
+    }
+
+    try {
+      const { usedFallback } = await resolveUnique(
+        page,
+        converted.step.selector,
+        VERIFY_TIMEOUT_MS
+      );
+      this.verifications.set(index, { status: "ok", usedFallback });
+    } catch (err) {
+      const message = (err as Error).message;
+      // A click that navigates moves the page out from under the check. That is
+      // not a broken step, and reporting it as one would make the whole feature
+      // untrustworthy.
+      if (safeUrl(page) !== urlBefore) {
+        this.verifications.set(index, {
+          status: "unchecked",
+          message: "The page navigated before the step could be checked"
+        });
+        return;
+      }
+      this.verifications.set(index, {
+        status: message.includes("matches") ? "ambiguous" : "not-found",
+        message
+      });
+    }
+  }
+
+  private pushAction(action: RecordedAction, page?: Page): void {
     this.actions.push(action);
+    const index = this.actions.length - 1;
     this.lastActionAt = Date.now();
+
+    if (page && action.element) {
+      void this.verifyAction(index, action, page);
+    }
 
     if (action.isFinal) {
       // The closing action has been captured: nothing may follow it, so disarm and
@@ -509,19 +575,29 @@ export class BrowserSession {
     steps: Step[];
     credentials: Array<{ name: string; value: string }>;
     skipped: number;
+    verifications: StepVerification[];
   } {
     const result = actionsToSteps(this.actions);
     return {
       actions: [...this.actions],
       steps: result.steps,
       credentials: result.credentials,
-      skipped: result.skipped.length
+      skipped: result.skipped.length,
+      // Aligned with `steps`: the source index tells which action each step came from.
+      verifications: result.sourceActionIndex.map(
+        (actionIndex) =>
+          this.verifications.get(actionIndex) ?? {
+            status: "unchecked" as const,
+            message: "Not checked yet"
+          }
+      )
     };
   }
 
   /** Discards the recorded actions, which also unlocks recording again. */
   clearRecording(): void {
     this.actions.length = 0;
+    this.verifications.clear();
     this.armedFinal = false;
     void this.applyConfigToAllPages().catch(() => undefined);
   }

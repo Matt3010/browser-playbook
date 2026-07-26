@@ -235,7 +235,8 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
           actions: recording.actions,
           steps: recording.steps,
           credentials: recording.credentials,
-          skipped: recording.skipped
+          skipped: recording.skipped,
+          verifications: recording.verifications ?? []
         };
       } catch (err) {
         const status = err instanceof WorkerHttpError ? err.statusCode : 503;

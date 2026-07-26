@@ -11,6 +11,7 @@ import {
   type Schedule,
   type SessionInfo,
   type Step,
+  type StepVerification,
   type Workflow
 } from "@/lib/api";
 import { StepEditor } from "@/components/StepEditor";
@@ -32,6 +33,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [runAt, setRunAt] = useState("");
   const [timezone, setTimezone] = useState("Europe/Rome");
   const [dirty, setDirty] = useState(false);
+  const [verifications, setVerifications] = useState<StepVerification[]>([]);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -144,6 +146,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
         if (info.recording) {
           const recording = await api.get<RecordingResult>(`/sessions/${sessionId}/recording`);
           setSteps(recording.steps);
+          setVerifications(recording.verifications ?? []);
           setDirty(true);
           if (recording.skipped > 0) {
             log(`${recording.skipped} azioni scartate: selector non univoco`);
@@ -168,7 +171,18 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           `/sessions/${session.sessionId}/recording`
         );
         setSteps(recording.steps);
+        setVerifications(recording.verifications ?? []);
         setDirty(true);
+
+        const broken = (recording.verifications ?? []).filter(
+          (v) => v.status === "ambiguous" || v.status === "not-found"
+        );
+        log(
+          broken.length === 0
+            ? `Registrazione fermata: ${recording.steps.length} step, tutti verificati`
+            : `Registrazione fermata: ${broken.length} step non rieseguibili, controllali prima di salvare`
+        );
+        return;
       }
       log(enabled ? "Registrazione avviata" : "Registrazione fermata");
     });
@@ -199,6 +213,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     await run("clear", async () => {
       await api.del(`/sessions/${session.sessionId}/recording`);
       setSteps([]);
+      setVerifications([]);
       setDirty(true);
       setSession({ ...session, armedFinal: false, recording: false });
       log("Registrazione azzerata");
@@ -413,6 +428,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
         <div className="card h-[520px] overflow-hidden p-0">
           <StepEditor
             steps={steps}
+            verifications={verifications}
             onChange={(next) => {
               setSteps(next);
               setDirty(true);

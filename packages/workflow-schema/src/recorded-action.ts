@@ -291,6 +291,12 @@ export interface ConversionResult {
   credentials: Array<{ name: string; value: string }>;
   /** Actions that could not be converted (ambiguous selector, unsupported kind). */
   skipped: RecordedAction[];
+  /**
+   * Index of the action each step came from, aligned with `steps`. Needed to line
+   * per-action results (such as a selector check) up with what the user sees,
+   * since fills collapse and repeated navigations are dropped.
+   */
+  sourceActionIndex: number[];
 }
 
 /**
@@ -305,8 +311,9 @@ export function actionsToSteps(
   const steps: Step[] = [];
   const credentials: Array<{ name: string; value: string }> = [];
   const skipped: RecordedAction[] = [];
+  const sourceActionIndex: number[] = [];
 
-  for (const action of actions) {
+  for (const [actionIndex, action] of actions.entries()) {
     const converted = actionToStep(action, opts);
     if (!converted) {
       skipped.push(action);
@@ -322,6 +329,7 @@ export function actionsToSteps(
       sameTarget(previous, step)
     ) {
       steps[steps.length - 1] = { ...previous, value: step.value, name: step.name };
+      sourceActionIndex[sourceActionIndex.length - 1] = actionIndex;
     } else if (
       previous &&
       step.type === "goto" &&
@@ -331,6 +339,7 @@ export function actionsToSteps(
       // duplicate navigation, ignore
     } else {
       steps.push(step);
+      sourceActionIndex.push(actionIndex);
     }
 
     if (credential) {
@@ -340,5 +349,5 @@ export function actionsToSteps(
     }
   }
 
-  return { steps, credentials, skipped };
+  return { steps, credentials, skipped, sourceActionIndex };
 }

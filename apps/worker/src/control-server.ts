@@ -139,7 +139,8 @@ export async function buildControlServer(
       // separately, encrypted before storage.
       credentials: recording.credentials.map((c) => ({ name: c.name })),
       credentialValues: recording.credentials,
-      skipped: recording.skipped
+      skipped: recording.skipped,
+      verifications: recording.verifications
     };
   });
 

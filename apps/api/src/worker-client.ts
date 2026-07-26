@@ -26,6 +26,8 @@ export interface WorkerRecording {
    */
   credentialValues?: Array<{ name: string; value: string }>;
   skipped: number;
+  /** Per-step outcome of checking the selector against the live page. */
+  verifications?: Array<{ status: string; message?: string; usedFallback?: boolean }>;
 }
 
 export class WorkerHttpError extends Error {

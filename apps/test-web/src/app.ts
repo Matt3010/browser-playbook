@@ -368,6 +368,25 @@ ${summary}`
 <p><a class="btn" id="download-link" href="/elements/download" download>Scarica file</a></p>
 <p><a class="btn" id="download-hostile-link" href="/elements/download-hostile" download>Scarica file con nome ostile</a></p>
 
+<fieldset>
+  <legend>Elemento che la pagina duplica dopo il click</legend>
+  <!--
+    Lists that re-render, "add another" controls and infinite scrolls all do this:
+    the element the recorder saw as unique has an identical twin a moment later.
+    The selector recorded is then ambiguous, and only checking it against the page
+    after the interaction can reveal it.
+  -->
+  <div id="clone-target-area">
+    <button class="clone-me" type="button" onclick="cloneMe(this)">Aggiungi riga</button>
+  </div>
+</fieldset>
+<script>
+  function cloneMe(button) {
+    var copy = button.cloneNode(true);
+    document.getElementById("clone-target-area").appendChild(copy);
+  }
+</script>
+
 <h2>Iframe same-origin</h2>
 <iframe id="inner" title="Contenuto interno" src="/elements/frame"></iframe>`
       )

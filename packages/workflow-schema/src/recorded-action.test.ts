@@ -352,3 +352,72 @@ describe("credential naming across sites", () => {
     }
   });
 });
+
+describe("mapping steps back to the actions that produced them", () => {
+  // Verification happens per recorded action, but the user sees steps. Without a
+  // mapping the two cannot be lined up, because fills collapse and repeated
+  // navigations are dropped.
+  it("reports the source action of every step", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "navigate", url: "http://a.test/login" }),
+        action({ kind: "fill", element: emailField, value: "a@b.c" }),
+        action({ kind: "click", element: { tag: "button", role: "button", accessibleName: "Login", unique: { role: true } } })
+      ],
+      { newId }
+    );
+    expect(result.sourceActionIndex).toEqual([0, 1, 2]);
+    expect(result.steps).toHaveLength(3);
+  });
+
+  it("points a collapsed fill at the last action that changed it", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "fill", element: emailField, value: "t" }),
+        action({ kind: "fill", element: emailField, value: "test@example.com" })
+      ],
+      { newId }
+    );
+    expect(result.steps).toHaveLength(1);
+    expect(result.sourceActionIndex).toEqual([1]);
+  });
+
+  it("skips the de-duplicated navigation", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "navigate", url: "http://a.test/" }),
+        action({ kind: "navigate", url: "http://a.test/" }),
+        action({ kind: "navigate", url: "http://a.test/next" })
+      ],
+      { newId }
+    );
+    expect(result.steps).toHaveLength(2);
+    expect(result.sourceActionIndex).toEqual([0, 2]);
+  });
+
+  it("stays aligned when an action is skipped for having no unique selector", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "navigate", url: "http://a.test/" }),
+        action({ kind: "click", element: { tag: "div", text: "X", unique: { text: false } } }),
+        action({ kind: "fill", element: emailField, value: "a@b.c" })
+      ],
+      { newId }
+    );
+    expect(result.steps).toHaveLength(2);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.sourceActionIndex).toEqual([0, 2]);
+  });
+
+  it("keeps one index per step, always", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "navigate", url: "http://a.test/" }),
+        action({ kind: "fill", element: emailField, value: "x" }),
+        action({ kind: "check", element: emailField })
+      ],
+      { newId }
+    );
+    expect(result.sourceActionIndex).toHaveLength(result.steps.length);
+  });
+});

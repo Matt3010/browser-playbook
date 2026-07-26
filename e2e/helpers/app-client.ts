@@ -151,10 +151,12 @@ export class AppClient {
   }
 
   getRecording(sessionId: string) {
-    return this.ok<{ steps: Step[]; credentials: Array<{ name: string }>; skipped: number }>(
-      "GET",
-      `/api/sessions/${sessionId}/recording`
-    );
+    return this.ok<{
+      steps: Step[];
+      credentials: Array<{ name: string }>;
+      skipped: number;
+      verifications?: Array<{ status: string; message?: string }>;
+    }>("GET", `/api/sessions/${sessionId}/recording`);
   }
 
   saveRecordedCredentials(sessionId: string) {

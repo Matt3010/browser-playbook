@@ -161,11 +161,16 @@ docker-compose.integration.yml  data stores for the integration tests
 3. **Record**: an injected script highlights interactive elements, shows a tooltip
    with the element details and the proposed selector, and reports every action.
    The worker converts actions into structured steps.
-4. **Edit**: rename, change the selector or the value, reorder, delete, disable,
+4. **Check**: every recorded step is verified against the live page as you record,
+   using the same resolution the runner will use. Each step carries a badge —
+   *verificato*, *selector ambiguo*, *non trovato* — and stopping the recording
+   says how many steps are not replayable. A step whose page navigated away is
+   reported as unverified rather than broken, so the check never cries wolf.
+5. **Edit**: rename, change the selector or the value, reorder, delete, disable,
    add a wait or an assertion.
-5. **Save**: steps are persisted; secrets captured during recording are stored
+6. **Save**: steps are persisted; secrets captured during recording are stored
    encrypted and referenced as `{{credentials.name}}`.
-6. **Run** immediately, or **schedule** a single future run.
+7. **Run** immediately, or **schedule** a single future run.
 
 ### Step format
 
