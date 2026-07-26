@@ -65,13 +65,15 @@ async function withOverlayFallback(
   step: Step,
   ctx: StepExecutionContext,
   locator: Locator,
-  action: (options: { timeout: number; force?: boolean }) => Promise<void>
+  action: (options: { timeout: number; force?: boolean }) => Promise<void>,
+  desiredState?: boolean
 ): Promise<void> {
   await deliverPointerAction({
     page: pageFor(step, ctx),
     locator,
     timeoutMs: step.timeoutMs,
     action,
+    desiredState,
     onFallback: (message) => ctx.log("warn", `'${step.name}': ${message}`)
   });
 }
@@ -135,13 +137,13 @@ export async function executeStep(step: Step, ctx: StepExecutionContext): Promis
 
     case "check": {
       const locator = await locatorFor(step, ctx);
-      await withOverlayFallback(step, ctx, locator, (options) => locator.check(options));
+      await withOverlayFallback(step, ctx, locator, (options) => locator.check(options), true);
       return;
     }
 
     case "uncheck": {
       const locator = await locatorFor(step, ctx);
-      await withOverlayFallback(step, ctx, locator, (options) => locator.uncheck(options));
+      await withOverlayFallback(step, ctx, locator, (options) => locator.uncheck(options), false);
       return;
     }
 

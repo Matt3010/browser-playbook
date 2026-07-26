@@ -44,27 +44,79 @@ export async function associatedLabel(page: Page, locator: Locator): Promise<Loc
 }
 
 /**
- * Performs a pointer action on an element that may be covered by its own label.
+ * True when a pointer aimed at the element's own centre would not reach it:
+ * it has no box, it is invisible, or something else is on top.
  *
- * Order matters, and it was learned the hard way on a real storefront. Clicking
- * the label is tried first, because that is what a person does and it is the only
- * thing that works when the page owns the input's state: forcing a click through
- * to the hidden input there leaves the selection unchanged and Playwright reports
- * "did not change its state". Forcing is kept as a last resort for elements that
- * are covered but have no label.
+ * Asked before acting rather than inferred from a timeout. Waiting for
+ * Playwright's own retry loop to give up costs the whole step timeout — fifteen
+ * seconds per covered control, every single run — and every hidden radio on a
+ * storefront is covered by construction.
+ */
+async function isPointerBlocked(locator: Locator): Promise<boolean> {
+  await locator.scrollIntoViewIfNeeded().catch(() => undefined);
+  return locator
+    .evaluate((el) => {
+      const rect = (el as HTMLElement).getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) return true;
+      const style = window.getComputedStyle(el as HTMLElement);
+      if (style.visibility === "hidden" || style.opacity === "0") return true;
+      if (style.pointerEvents === "none") return true;
+      const at = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+      return at !== el && !(el as HTMLElement).contains(at);
+    })
+    .catch(() => false);
+}
+
+/**
+ * Performs a pointer action on an element a real page may have covered.
  *
- * This is not a retry: the element was found and is the right one, only the way
- * the action is delivered changes. A genuinely missing or ambiguous element still
- * fails immediately.
+ * The shape of this comes from two failures on a real storefront. Forcing the
+ * action is useless when the page's own code owns the input's state: the click
+ * lands on the hidden input, the selection does not move and Playwright reports
+ * "did not change its state". And an input that cannot be reached at all must not
+ * cost a full timeout to discover, so coverage is checked up front.
+ *
+ * The order is therefore: skip if the state is already right, click the
+ * controlling label when the input itself is unreachable, and only fall back to
+ * the raw action — finally forcing it — when that did not work. Every branch that
+ * goes through the label re-reads the state afterwards, so a click that changed
+ * nothing is never mistaken for success.
+ *
+ * `desiredState` must be set for check/uncheck and left out for a plain click.
+ * Without it the label route would not be idempotent: clicking the label of an
+ * already ticked box unticks it.
  */
 export async function deliverPointerAction(options: {
   page: Page;
   locator: Locator;
   timeoutMs: number;
   action: (options: { timeout: number; force?: boolean }) => Promise<void>;
+  /** true for check, false for uncheck, omitted for actions with no state. */
+  desiredState?: boolean;
   onFallback?: (message: string) => Promise<void> | void;
 }): Promise<void> {
-  const { page, locator, timeoutMs, action, onFallback } = options;
+  const { page, locator, timeoutMs, action, desiredState, onFallback } = options;
+
+  const stateIs = async (expected: boolean): Promise<boolean> =>
+    locator
+      .isChecked({ timeout: timeoutMs })
+      .then((checked) => checked === expected)
+      .catch(() => false);
+
+  // Playwright's check() is a no-op on a box already in the requested state, and so
+  // is this: the state is read before anything is clicked.
+  if (desiredState !== undefined && (await stateIs(desiredState))) return;
+
+  if (await isPointerBlocked(locator)) {
+    const label = await associatedLabel(page, locator);
+    if (label) {
+      await onFallback?.("the input is covered by its own label; clicking the label instead");
+      await label.click({ timeout: timeoutMs });
+      if (desiredState === undefined || (await stateIs(desiredState))) return;
+      await onFallback?.("the label click did not move the state; acting on the input itself");
+    }
+  }
+
   try {
     await action({ timeout: timeoutMs });
     return;

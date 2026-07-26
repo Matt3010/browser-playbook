@@ -94,7 +94,11 @@ These are the classes of defect this codebase actually produced, so look here fi
   input whose state the page's own code owns: the click lands, the state does not
   move, and the failure reads "did not change its state". Do what a person does —
   click the controlling label — and keep `force` for covered elements that have no
-  label.
+  label. Coverage is asked up front (`document.elementFromPoint` on the element's
+  own centre) rather than inferred from an expired timeout, which used to cost the
+  whole step timeout per covered control. Going through the label costs idempotence,
+  so `check`/`uncheck` read the state before acting and read it again afterwards:
+  a label click that moved nothing must never pass for success.
 - **The same decision made twice drifts.** The recorder's tooltip and "selected
   element" panel computed their proposed selector with a second implementation
   living inside the injected script, which never learned the rules added later, so

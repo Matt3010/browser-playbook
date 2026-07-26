@@ -657,12 +657,16 @@ export class BrowserSession {
 
     // Covered controls are delivered exactly as the runner delivers them, so a
     // control that can be recorded is a control that can be replayed.
-    const deliver = (action: (options: { timeout: number; force?: boolean }) => Promise<void>) =>
+    const deliver = (
+      action: (options: { timeout: number; force?: boolean }) => Promise<void>,
+      desiredState?: boolean
+    ) =>
       deliverPointerAction({
         page,
         locator,
         timeoutMs: 15_000,
         action,
+        desiredState,
         onFallback: (message) => {
           this.log.info({ sessionId: this.sessionId, selector: input.selector }, message);
         }
@@ -683,10 +687,10 @@ export class BrowserSession {
         await locator.selectOption(input.value ?? "", { timeout: 15_000 });
         return;
       case "check":
-        await deliver((options) => locator.check(options));
+        await deliver((options) => locator.check(options), true);
         return;
       case "uncheck":
-        await deliver((options) => locator.uncheck(options));
+        await deliver((options) => locator.uncheck(options), false);
         return;
       default:
         throw new Error(`Unsupported interaction: ${String(input.kind)}`);

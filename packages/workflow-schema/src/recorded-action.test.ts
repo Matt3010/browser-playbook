@@ -421,3 +421,56 @@ describe("mapping steps back to the actions that produced them", () => {
     expect(result.sourceActionIndex).toHaveLength(result.steps.length);
   });
 });
+
+describe("step names", () => {
+  // The step name is only a label, but a name minted from a price reads as a lie
+  // the moment the price moves, and the operator has no way to tell whether the
+  // step is stale or the page changed. The same volatility rules that keep a price
+  // out of the selector keep it out of the name.
+  const pricedRadio = {
+    tag: "input",
+    type: "radio",
+    role: "radio",
+    accessibleName: '15" Nota 1 Da € 1.749,00 o € 57,26 al mese per 36 mesi, TAN fisso 10,99% Nota ①',
+    label: '15" Nota 1 Da € 1.749,00 o € 57,26 al mese per 36 mesi, TAN fisso 10,99% Nota ①',
+    nameAttr: "chassis-dimensionScreensize",
+    valueAttr: "15inch",
+    id: "_r_e_",
+    unique: { role: true, label: true, name: false, id: true }
+  };
+
+  it("keeps prices and percentages out of the name", () => {
+    const result = actionToStep(action({ kind: "check", element: pricedRadio }), { newId });
+    const name = result!.step.name;
+    expect(name).not.toContain("1.749,00");
+    expect(name).not.toContain("57,26");
+    expect(name).not.toContain("10,99");
+    expect(name).not.toContain("€");
+  });
+
+  it("still says which option was chosen", () => {
+    const result = actionToStep(action({ kind: "check", element: pricedRadio }), { newId });
+    expect(result!.step.name).toMatch(/15/);
+  });
+
+  it("does not let page copy become a paragraph-long name", () => {
+    const wordy = {
+      tag: "button",
+      role: "button",
+      accessibleName:
+        "Continua e accetta le condizioni generali di vendita, la politica sulla privacy e " +
+        "tutte le altre clausole applicabili a questo ordine",
+      // A structural selector exists, so the action is recordable: without one the
+      // recorder refuses outright and there is no name to judge.
+      cssPath: "form > div > button",
+      unique: { role: true, css: true }
+    };
+    const result = actionToStep(action({ kind: "click", element: wordy }), { newId });
+    expect(result!.step.name.length).toBeLessThanOrEqual(80);
+  });
+
+  it("leaves an ordinary label untouched", () => {
+    const result = actionToStep(action({ kind: "fill", element: emailField, value: "x" }), { newId });
+    expect(result!.step.name).toBe("Inserisci Email");
+  });
+});

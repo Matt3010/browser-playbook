@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { chooseSelector, describeSelector, type ElementInfo, type Selector } from "./selector";
+import {
+  chooseSelector,
+  describeSelector,
+  looksVolatile,
+  type ElementInfo,
+  type Selector
+} from "./selector";
 import { StepSchema, type Step, type StepType } from "./step";
 
 export const RECORDED_ACTION_KINDS = [
@@ -80,15 +86,58 @@ const KIND_TO_STEP_TYPE: Record<RecordedActionKind, StepType | null> = {
   wait: "wait"
 };
 
+/**
+ * A step name is only a label, but one minted from a price starts lying the moment
+ * the price moves, and the operator cannot tell whether the step is stale or the
+ * page changed. Past this length a label is page copy rather than a name.
+ */
+const MAX_STEP_NAME_LENGTH = 60;
+
+/** Connectives left dangling when a name is cut before a price. */
+const DANGLING_WORDS = /^(da|a|o|e|di|per|al|alla|con|su|in|the|from|to|or|and|of|for|at)$/i;
+
+/**
+ * Drops everything from the first volatile fragment onwards, so `15" Nota 1 Da
+ * € 1.749,00 o € 57,26 al mese` becomes `15" Nota 1`: the part that identifies the
+ * option survives, the part that changes with the price does not.
+ */
+function cutBeforeVolatile(text: string): string | null {
+  const kept: string[] = [];
+  for (const word of text.split(" ")) {
+    if (looksVolatile(word)) break;
+    kept.push(word);
+  }
+  while (kept.length > 0 && DANGLING_WORDS.test(kept[kept.length - 1] as string)) kept.pop();
+  const result = kept.join(" ").trim();
+  return result.length > 1 ? result : null;
+}
+
+/** Text fit to name a step: no volatile fragment, no wall of page copy. */
+function stableText(value: string | null | undefined): string | null {
+  const text = value?.trim().replace(/\s+/g, " ");
+  if (!text) return null;
+  const stable = looksVolatile(text) ? cutBeforeVolatile(text) : text;
+  if (!stable) return null;
+  return stable.length > MAX_STEP_NAME_LENGTH
+    ? `${stable.slice(0, MAX_STEP_NAME_LENGTH - 1).trimEnd()}…`
+    : stable;
+}
+
 function labelFor(element: ElementInfo | null | undefined): string {
   if (!element) return "elemento";
+  // The value attribute names the option a grouped input stands for, and unlike a
+  // label it cannot carry a price. It is only read for inputs whose value is a
+  // fixed choice, never for a field the user types into.
+  const choiceValue =
+    element.type === "radio" || element.type === "checkbox" ? element.valueAttr : null;
   return (
-    element.label ||
-    element.accessibleName ||
-    element.placeholder ||
-    element.nameAttr ||
-    element.text?.trim().slice(0, 40) ||
-    element.id ||
+    stableText(element.label) ||
+    stableText(element.accessibleName) ||
+    stableText(element.placeholder) ||
+    stableText(choiceValue) ||
+    stableText(element.nameAttr) ||
+    stableText(element.text) ||
+    stableText(element.id) ||
     element.tag.toLowerCase()
   );
 }
