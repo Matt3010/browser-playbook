@@ -1,4 +1,32 @@
 import type { Page } from "playwright";
+import { assertSafeTargetUrl, type UrlSafetyOptions } from "@app/shared";
+
+/** URLs that carry no network target and are therefore always acceptable. */
+const NEUTRAL_URLS = new Set(["", "about:blank", "about:srcdoc", "chrome://newtab/"]);
+
+/**
+ * Re-checks where a navigation actually ended up.
+ *
+ * Validating only the requested URL is not enough: a page is free to redirect the
+ * browser anywhere, including a private address or another container on the
+ * internal network. Since the resulting page is visible over noVNC and readable
+ * by assertion steps, an unchecked redirect would be a way around the URL guard.
+ */
+export function assertSafeLandedUrl(
+  landedUrl: string,
+  options: UrlSafetyOptions,
+  requestedUrl?: string
+): void {
+  if (NEUTRAL_URLS.has(landedUrl)) return;
+  try {
+    assertSafeTargetUrl(landedUrl, options);
+  } catch (err) {
+    const from = requestedUrl && requestedUrl !== landedUrl ? ` from ${requestedUrl}` : "";
+    throw new Error(
+      `Navigation${from} ended on a blocked address (${landedUrl}): ${(err as Error).message}`
+    );
+  }
+}
 
 /**
  * A navigation that the page itself replaced. Real sites do this constantly:

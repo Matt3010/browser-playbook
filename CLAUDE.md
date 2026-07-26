@@ -52,6 +52,30 @@ These are the classes of defect this codebase actually produced, so look here fi
 - **Reserved behaviour of the reaper.** Polling a session by id counts as driving
   it, so a test that polls `/sessions/:id` can never observe the idle timeout. Use
   the list endpoint.
+- **Validating the request instead of the result.** `goto` checked the requested
+  URL, but a page may redirect the browser anywhere, including an internal
+  address whose response is then visible over noVNC. Where a navigation *lands*
+  is now re-checked. The same reasoning applies elsewhere: validate the outcome,
+  not only the input.
+- **Validating before defaults are applied.** Closing-action placement was decided
+  on the raw payload, where an omitted `enabled` looked like `false`. Parse first,
+  validate second.
+- **Creating a row before the side effect can fail.** An execution row was written
+  and only then enqueued; a queue failure left it `queued` forever. Every route
+  that writes a row and then performs a fallible action must close the row on failure.
+- **One Dockerfile declared by two services** produced two images that drifted, so
+  a new migration was silently never applied. Services that must share code share
+  the `image:` tag.
+- **Suites sharing a database in parallel.** Recursive pnpm scripts run in
+  parallel by default; two suites truncating one database made failures look random.
+
+### Things a test cannot pin down
+
+Some behaviour depends on browser timing and must not be asserted in e2e:
+whether a self-redirect lands before or after `domcontentloaded`, and therefore
+whether `goto` reports "interrupted by another navigation". Assert the outcome in
+e2e and cover the branch itself with unit tests
+(`apps/worker/src/runner/navigation.test.ts`).
 
 ## Verification
 

@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Page } from "playwright";
-import { gotoTolerantOfRedirects, isSupersededNavigation } from "./navigation";
+import {
+  assertSafeLandedUrl,
+  gotoTolerantOfRedirects,
+  isSupersededNavigation
+} from "./navigation";
 
 function fakePage(overrides: Partial<Page> = {}): Page {
   return {
@@ -89,5 +93,62 @@ describe("gotoTolerantOfRedirects", () => {
       waitForLoadState: vi.fn().mockRejectedValue(new Error("Timeout"))
     });
     await expect(gotoTolerantOfRedirects(page, "https://a.test", 5000)).resolves.toBeUndefined();
+  });
+});
+
+describe("assertSafeLandedUrl", () => {
+  const strict = { allowPrivateTargets: false, allowedHosts: [] };
+
+  it("accepts a public address", () => {
+    expect(() => assertSafeLandedUrl("https://example.com/page", strict)).not.toThrow();
+  });
+
+  it("blocks a redirect that lands on a private or internal address", () => {
+    // A public page is free to redirect the browser at internal services; the
+    // resulting page is visible over noVNC, so it must be refused.
+    for (const landed of [
+      "http://localhost:5000/sessions",
+      "http://127.0.0.1:4000/api/workflows",
+      "http://10.0.0.5/",
+      "http://192.168.1.10/admin",
+      "http://172.16.0.1/"
+    ]) {
+      expect(
+        () => assertSafeLandedUrl(landed, strict, "https://public.test/redirect"),
+        landed
+      ).toThrow(/blocked address/);
+    }
+  });
+
+  it("names both the requested and the reached URL", () => {
+    try {
+      assertSafeLandedUrl("http://localhost:5000/", strict, "https://public.test/go");
+      throw new Error("should have thrown");
+    } catch (err) {
+      const message = (err as Error).message;
+      expect(message).toContain("https://public.test/go");
+      expect(message).toContain("http://localhost:5000/");
+    }
+  });
+
+  it("ignores neutral URLs that target nothing", () => {
+    for (const neutral of ["", "about:blank", "about:srcdoc"]) {
+      expect(() => assertSafeLandedUrl(neutral, strict), neutral).not.toThrow();
+    }
+  });
+
+  it("honours the configured exception for the test application", () => {
+    expect(() =>
+      assertSafeLandedUrl("http://test-web:3001/elements", {
+        allowPrivateTargets: false,
+        allowedHosts: ["test-web"]
+      })
+    ).not.toThrow();
+  });
+
+  it("allows everything when private targets are explicitly enabled", () => {
+    expect(() =>
+      assertSafeLandedUrl("http://localhost:5000/", { allowPrivateTargets: true })
+    ).not.toThrow();
   });
 });

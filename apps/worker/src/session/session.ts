@@ -19,7 +19,7 @@ import {
 import type { SessionSlot } from "./allocator";
 import { recorderBrowserScript } from "../recorder/browser-script";
 import { buildHighlightCss, DEFAULT_RECORDER_COLORS } from "../recorder/highlight-css";
-import { gotoTolerantOfRedirects } from "../runner/navigation";
+import { assertSafeLandedUrl, gotoTolerantOfRedirects } from "../runner/navigation";
 
 const TOOLTIP_ID = "__recorder_tooltip__";
 
@@ -41,6 +41,8 @@ export interface SessionOptions {
   screenWidth: number;
   screenHeight: number;
   logger: Logger;
+  /** Used to refuse a navigation that lands on a blocked address after a redirect. */
+  urlSafety: { allowPrivateTargets: boolean; allowedHosts: string[] };
   /** Called when the session closes itself (timeout or crash). */
   onClosed: (sessionId: string) => void;
 }
@@ -230,6 +232,7 @@ export class BrowserSession {
     await gotoTolerantOfRedirects(initial, this.startUrl, 45_000, (message) =>
       this.log.warn(message)
     );
+    assertSafeLandedUrl(safeUrl(initial), this.options.urlSafety, this.startUrl);
     await this.applyConfigToAllPages();
   }
 
@@ -526,6 +529,7 @@ export class BrowserSession {
     const page = this.getActivePage();
     if (!page) throw new Error("Session has no open page");
     await gotoTolerantOfRedirects(page, url, 45_000, (message) => this.log.warn(message));
+    assertSafeLandedUrl(safeUrl(page), this.options.urlSafety, url);
     await this.applyConfigToPage(page);
   }
 

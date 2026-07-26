@@ -3,7 +3,7 @@ import type { Page } from "playwright";
 import { assertSafeTargetUrl, renderTemplate, type TemplateContext } from "@app/shared";
 import type { Step } from "@app/workflow-schema";
 import { resolveUnique } from "./locator";
-import { gotoTolerantOfRedirects } from "./navigation";
+import { assertSafeLandedUrl, gotoTolerantOfRedirects } from "./navigation";
 import type { BrowserSession } from "../session/session";
 
 export interface StepExecutionContext {
@@ -105,6 +105,8 @@ export async function executeStep(step: Step, ctx: StepExecutionContext): Promis
       await gotoTolerantOfRedirects(page, url, step.timeoutMs, (message) =>
         ctx.log("warn", `'${step.name}': ${message}`)
       );
+      // The page may have redirected the browser somewhere else entirely.
+      assertSafeLandedUrl(page.url(), ctx.urlSafety, url);
       return;
     }
 

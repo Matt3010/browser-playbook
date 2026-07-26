@@ -104,6 +104,10 @@ export class SessionManager {
       screenWidth: this.config.screenWidth,
       screenHeight: this.config.screenHeight,
       logger: this.log,
+      urlSafety: {
+        allowPrivateTargets: this.config.allowPrivateTargets,
+        allowedHosts: this.config.allowedTargetHosts
+      },
       onClosed: (sessionId) => {
         this.sessions.delete(sessionId);
         this.allocator.release(slot);
