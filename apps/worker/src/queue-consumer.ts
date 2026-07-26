@@ -50,7 +50,15 @@ export function startQueueConsumer(deps: QueueConsumerDeps): QueueConsumer {
       connection,
       // One execution at a time per worker keeps the browser session count and
       // the display/port allocation predictable.
-      concurrency: 1
+      concurrency: 1,
+      /**
+       * A job whose worker died is "stalled". By default BullMQ puts it back on
+       * the queue and runs it again, which for this product means replaying a
+       * workflow that already had an effect on the target site — placing an
+       * order twice, for example. A workflow interrupted halfway must be
+       * reported and left to the user, never repeated on its own.
+       */
+      maxStalledCount: 0
     }
   );
 
@@ -68,6 +76,53 @@ export function startQueueConsumer(deps: QueueConsumerDeps): QueueConsumer {
       connection.disconnect();
     }
   };
+}
+
+/**
+ * Closes executions that were in flight when the worker stopped.
+ *
+ * Only the worker can advance an execution, so anything still `starting` or
+ * `running` at startup belonged to a process that no longer exists: a restart,
+ * a crash or an out-of-memory kill. Left alone it stays "in progress" forever in
+ * the UI, and its live log stream never ends.
+ *
+ * This assumes a single worker, which is what the MVP deploys. With several
+ * workers it would have to be scoped to the executions this instance owned.
+ */
+export async function reconcileOrphanedExecutions(deps: {
+  prisma: PrismaClient;
+  notifications: NotificationService;
+  log: Logger;
+}): Promise<number> {
+  const orphans = await deps.prisma.execution.findMany({
+    where: { status: { in: ["starting", "running"] } },
+    include: { workflow: { select: { name: true, userId: true } } }
+  });
+
+  for (const execution of orphans) {
+    const message = "The execution was interrupted: the worker stopped while it was running";
+    await deps.prisma.execution.update({
+      where: { id: execution.id },
+      data: { status: "failed", finishedAt: new Date(), errorMessage: message }
+    });
+    await deps.prisma.executionLog.create({
+      data: { executionId: execution.id, level: "error", message }
+    });
+    await deps.notifications.notify(
+      {
+        userId: execution.workflow.userId,
+        type: "workflow_failed",
+        title: "Workflow interrotto",
+        message: `Il workflow "${execution.workflow.name}" è stato interrotto: il worker si è fermato durante l'esecuzione.`
+      },
+      (err) => deps.log.warn({ err }, "Notification delivery failed")
+    );
+  }
+
+  if (orphans.length > 0) {
+    deps.log.warn({ count: orphans.length }, "Closed executions orphaned by a worker restart");
+  }
+  return orphans.length;
 }
 
 /**

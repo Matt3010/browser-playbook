@@ -1,7 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { PrismaClient, NotificationService } from "@app/database";
 import { hashPassword, createLogger } from "@app/shared";
-import { reconcileMissedSchedules } from "../src/queue-consumer";
+import {
+  reconcileMissedSchedules,
+  reconcileOrphanedExecutions
+} from "../src/queue-consumer";
 
 /**
  * A scheduled job can be lost if Redis is wiped while the stack is down. The
@@ -114,5 +117,61 @@ describe("missed schedule reconciliation", () => {
     expect(await reconcileMissedSchedules({ prisma, notifications, log })).toBe(2);
     expect(await prisma.notification.count()).toBe(2);
     expect(await prisma.schedule.count({ where: { status: "failed" } })).toBe(2);
+  });
+});
+
+describe("orphaned executions after a worker crash", () => {
+  it("closes executions left running when the worker died, and notifies", async () => {
+    // The worker is the only thing that can advance an execution. If it is killed
+    // (restart, OOM) an execution stays `running` forever: the UI shows it as in
+    // progress and nothing ever finishes it.
+    const orphan = await prisma.execution.create({
+      data: { workflowId, status: "running", startedAt: new Date(Date.now() - 60_000) }
+    });
+    const starting = await prisma.execution.create({
+      data: { workflowId, status: "starting", startedAt: new Date(Date.now() - 60_000) }
+    });
+
+    const count = await reconcileOrphanedExecutions({ prisma, notifications, log });
+    expect(count).toBe(2);
+
+    for (const id of [orphan.id, starting.id]) {
+      const updated = await prisma.execution.findUnique({ where: { id } });
+      expect(updated!.status).toBe("failed");
+      expect(updated!.finishedAt).not.toBeNull();
+      expect(updated!.errorMessage).toMatch(/interrupted/i);
+    }
+
+    const created = await prisma.notification.findMany({ where: { userId } });
+    expect(created).toHaveLength(2);
+    expect(created[0].type).toBe("workflow_failed");
+  });
+
+  it("records why the execution stopped, so the log is not silently truncated", async () => {
+    const orphan = await prisma.execution.create({
+      data: { workflowId, status: "running", startedAt: new Date() }
+    });
+    await reconcileOrphanedExecutions({ prisma, notifications, log });
+
+    const logs = await prisma.executionLog.findMany({ where: { executionId: orphan.id } });
+    expect(logs.some((l) => l.level === "error" && /interrupted/i.test(l.message))).toBe(true);
+  });
+
+  it("leaves finished executions alone", async () => {
+    for (const status of ["completed", "failed", "cancelled"] as const) {
+      await prisma.execution.create({
+        data: { workflowId, status, finishedAt: new Date() }
+      });
+    }
+    expect(await reconcileOrphanedExecutions({ prisma, notifications, log })).toBe(0);
+    expect(await prisma.notification.count()).toBe(0);
+  });
+
+  it("leaves queued executions alone: their job is still in the queue", async () => {
+    await prisma.execution.create({ data: { workflowId, status: "queued" } });
+    expect(await reconcileOrphanedExecutions({ prisma, notifications, log })).toBe(0);
+    expect(
+      (await prisma.execution.findFirst({ where: { workflowId } }))!.status
+    ).toBe("queued");
   });
 });

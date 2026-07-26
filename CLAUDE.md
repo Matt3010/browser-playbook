@@ -68,6 +68,16 @@ These are the classes of defect this codebase actually produced, so look here fi
   the `image:` tag.
 - **Suites sharing a database in parallel.** Recursive pnpm scripts run in
   parallel by default; two suites truncating one database made failures look random.
+- **Nothing closes work whose owner died.** Only the worker advances an execution,
+  so one left `running` when the worker was killed stayed "in progress" forever.
+  Reconcile in-flight state at startup, as `reconcileOrphanedExecutions` does.
+- **Library defaults that retry.** BullMQ replays a *stalled* job by default,
+  independently of `attempts`. For this product that means replaying a workflow
+  that already acted on the target site, so `maxStalledCount: 0` is deliberate.
+  Check what a dependency does on failure, not only on success.
+- **Files outlive their rows.** Cascading deletes clear the database and leave the
+  volume untouched; artifacts had to be removed explicitly, restricted to the
+  artifact root.
 
 ### Things a test cannot pin down
 

@@ -4,7 +4,11 @@ import { createLogger } from "@app/shared";
 import { loadConfig } from "./config";
 import { SessionManager } from "./session/manager";
 import { buildControlServer } from "./control-server";
-import { startQueueConsumer, reconcileMissedSchedules } from "./queue-consumer";
+import {
+  startQueueConsumer,
+  reconcileMissedSchedules,
+  reconcileOrphanedExecutions
+} from "./queue-consumer";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -22,6 +26,10 @@ async function main(): Promise<void> {
   // Reclaims the slots of sessions whose page was closed or abandoned.
   sessions.startReaper();
 
+  // Anything still in flight belonged to a process that no longer exists.
+  await reconcileOrphanedExecutions({ prisma, notifications, log }).catch((err) =>
+    log.error({ err }, "Could not reconcile orphaned executions")
+  );
   await reconcileMissedSchedules({ prisma, notifications, log }).catch((err) =>
     log.error({ err }, "Could not reconcile missed schedules")
   );
