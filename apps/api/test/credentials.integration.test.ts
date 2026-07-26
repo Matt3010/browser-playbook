@@ -5,6 +5,9 @@ import {
   destroyTestContext,
   resetDatabase,
   registerUser,
+  createWorkflow,
+  gotoStep,
+  fillStep,
   type TestContext,
   type AuthedUser
 } from "./helpers";
@@ -154,5 +157,98 @@ describe("credentials and variables API", () => {
     });
     expect(response.statusCode).toBe(201);
     expect(await ctx.prisma.credential.count()).toBe(2);
+  });
+});
+
+describe("deleting a value a workflow depends on", () => {
+  // Nothing looked at who used a credential before removing it. The damage is
+  // contained — the run refuses to start rather than breaking halfway — but the user
+  // finds out when they try to run the workflow, not when they press delete.
+  it("refuses and names the workflows that reference it", async () => {
+    const credential = await ctx.app
+      .inject({
+        method: "POST",
+        url: "/api/credentials",
+        headers: { cookie: user.cookie },
+        payload: { name: "password_apple", kind: "secret", value: "hunter2" }
+      })
+      .then((r) => r.json<{ id: string }>());
+
+    const workflow = await createWorkflow(ctx.app, user.cookie, "Login Apple");
+    await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: {
+        steps: [
+          gotoStep("http://test-web:3001/login"),
+          fillStep("Password", "{{credentials.password_apple}}")
+        ]
+      }
+    });
+
+    const response = await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/credentials/${credential.id}`,
+      headers: { cookie: user.cookie }
+    });
+
+    expect(response.statusCode).toBe(409);
+    const body = response.json<{ error: string; workflows?: string[] }>();
+    expect(body.error).toMatch(/Login Apple/);
+
+    // And it is still there: a refusal that half-deletes would be worse than none.
+    const still = await ctx.prisma.credential.findUnique({ where: { id: credential.id } });
+    expect(still).not.toBeNull();
+  });
+
+  it("deletes one nobody references", async () => {
+    const credential = await ctx.app
+      .inject({
+        method: "POST",
+        url: "/api/credentials",
+        headers: { cookie: user.cookie },
+        payload: { name: "unused_value", kind: "variable", value: "x" }
+      })
+      .then((r) => r.json<{ id: string }>());
+
+    const response = await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/credentials/${credential.id}`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(204);
+  });
+
+  it("ignores a reference made by a disabled step", async () => {
+    // A disabled step never runs, so it cannot be broken by the deletion.
+    const credential = await ctx.app
+      .inject({
+        method: "POST",
+        url: "/api/credentials",
+        headers: { cookie: user.cookie },
+        payload: { name: "old_token", kind: "variable", value: "x" }
+      })
+      .then((r) => r.json<{ id: string }>());
+
+    const workflow = await createWorkflow(ctx.app, user.cookie, "Con step spento");
+    await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: {
+        steps: [
+          gotoStep("http://test-web:3001/login"),
+          { ...fillStep("Password", "{{variables.old_token}}"), enabled: false }
+        ]
+      }
+    });
+
+    const response = await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/credentials/${credential.id}`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(204);
   });
 });

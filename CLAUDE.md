@@ -157,6 +157,24 @@ These are the classes of defect this codebase actually produced, so look here fi
   always passes is worse than none; unreferenced extra tabs are ignored so a late
   popup does not abort a good run. A blank `window.open()` popup is still
   indistinguishable — the check covers the realistic case, not every case.
+- **The same decision made twice drifts, again.** Adding `tokenVersion` to
+  `requireAuth` left the noVNC WebSocket upgrade behind: it verified the cookie
+  itself, so a logout did not close a stream already running. Cookie authentication
+  now lives in `ownerOfCookie` and both call it. This is the second time this class
+  produced a defect; a decision duplicated anywhere is a defect waiting for one side
+  to change.
+- **A guard that cannot identify anything must count instead.** A popup opened with
+  a bare `window.open()` is `about:blank` when recorded and when replayed, so the
+  origin check is blind to it. What still gives away a shifted numbering is
+  arithmetic: more tabs open than the workflow ever refers to means one is
+  unaccounted for. The count comes from the steps, so no field was needed. It costs a
+  false stop when a harmless popup opens mid-flow before a step targeting a blank
+  tab, which is the price of not guessing which document to act on.
+- **A cap that protects the machine does not protect the people.** `maxSessions` was
+  global, so one user could hold every slot. `checkSessionLimits` adds a per-user cap,
+  defaulting to 0 (off) on purpose: an execution holds a session like a recording
+  does, so on a single-user instance a per-user cap below the global one would make
+  the owner'"'"'s own scheduled run fail while they record.
 - **A shared image drags its healthcheck along.** `migrate` was given the api image
   to avoid a second build, and inherited a healthcheck probing port 4000, which
   nothing serves there. It exits 0 but never turns healthy, so every service

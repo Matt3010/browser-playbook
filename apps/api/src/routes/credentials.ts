@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { encryptSecret, decryptSecret } from "@app/shared";
+import { encryptSecret, decryptSecret, extractTemplateRefs } from "@app/shared";
 import { requireAuth, currentUser } from "../auth";
 
 /** Names must be usable inside {{variables.x}} / {{credentials.x}} templates. */
@@ -19,6 +19,35 @@ const UpsertSchema = z.object({
 const UpdateSchema = z.object({
   value: z.string().max(4000)
 });
+
+/**
+ * Names of the workflows whose enabled steps reference this value. A disabled step
+ * never runs, so it cannot be broken by the deletion and is not counted.
+ */
+async function workflowsReferencing(
+  app: FastifyInstance,
+  userId: string,
+  name: string,
+  kind: string
+): Promise<string[]> {
+  const wanted = kind === "secret" ? "credentials" : "variables";
+  const workflows = await app.prisma.workflow.findMany({
+    where: { userId },
+    select: { name: true, steps: { select: { valueTemplate: true, enabled: true } } }
+  });
+  return workflows
+    .filter((workflow) =>
+      workflow.steps.some(
+        (step) =>
+          step.enabled &&
+          step.valueTemplate &&
+          extractTemplateRefs(step.valueTemplate).some(
+            (ref) => ref.kind === wanted && ref.key === name
+          )
+      )
+    )
+    .map((workflow) => workflow.name);
+}
 
 export async function credentialRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireAuth);
@@ -99,6 +128,21 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
       where: { id: request.params.id, userId }
     });
     if (!existing) return reply.code(404).send({ error: "Not found" });
+
+    // Removing a value a workflow still names does not break the run halfway — the
+    // pre-flight refuses to start — but the user would only discover it the next time
+    // they run the workflow, or worse, when a scheduled run failed overnight. Say it
+    // now, at the moment the decision is being made.
+    const users = await workflowsReferencing(app, userId, existing.name, existing.kind);
+    if (users.length > 0) {
+      return reply.code(409).send({
+        error:
+          `'${existing.name}' is used by ${users.join(", ")}. ` +
+          "Remove the reference from those workflows first, or the runs would refuse to start.",
+        workflows: users
+      });
+    }
+
     await app.prisma.credential.delete({ where: { id: existing.id } });
     return reply.code(204).send();
   });

@@ -6,10 +6,9 @@ import {
   assertSafeTargetUrl,
   encryptSecret,
   signSessionToken,
-  verifySessionToken,
-  verifyAuthToken
+  verifySessionToken
 } from "@app/shared";
-import { requireAuth, currentUser, SESSION_COOKIE } from "../auth";
+import { requireAuth, currentUser, ownerOfCookie, SESSION_COOKIE } from "../auth";
 import { WorkerHttpError, type WorkerSessionInfo } from "../worker-client";
 
 /** Shortest session lifetime a client may ask for. */
@@ -402,12 +401,11 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       const cookie = request.cookies[SESSION_COOKIE];
       if (!cookie) return closeWith(4401, "Not authenticated");
 
-      let userId: string;
-      try {
-        userId = verifyAuthToken(cookie, app.config.jwtSecret).userId;
-      } catch {
-        return closeWith(4401, "Invalid session");
-      }
+      // The same check requireAuth makes, so a cookie retired by a logout cannot
+      // keep a stream open for the rest of the VNC token's life.
+      const owner = await ownerOfCookie(app, cookie);
+      if (!owner) return closeWith(4401, "Invalid session");
+      const userId = owner.userId;
 
       const token = request.query.token;
       if (!token) return closeWith(4401, "Missing VNC token");

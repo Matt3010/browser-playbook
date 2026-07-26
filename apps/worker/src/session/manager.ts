@@ -2,10 +2,11 @@ import type { Logger } from "@app/shared";
 import type { WorkerConfig } from "../config";
 import { SlotAllocator, NoSlotAvailableError } from "./allocator";
 import { BrowserSession } from "./session";
+import { checkSessionLimits } from "./limits";
 
 export class SessionLimitError extends Error {
-  constructor(limit: number) {
-    super(`Maximum number of concurrent browser sessions reached (${limit})`);
+  constructor(message: string) {
+    super(message);
   }
 }
 
@@ -81,15 +82,22 @@ export class SessionManager {
     /** Omit for sessions driven by a running execution: those must not be reaped. */
     idleTimeoutMs?: number | null;
   }): Promise<BrowserSession> {
-    if (this.sessions.size >= this.config.maxSessions) {
-      throw new SessionLimitError(this.config.maxSessions);
-    }
+    const refusal = checkSessionLimits(
+      [...this.sessions.values()].map((session) => ({ userId: session.userId })),
+      input.userId,
+      { max: this.config.maxSessions, maxPerUser: this.config.maxSessionsPerUser }
+    );
+    if (refusal) throw new SessionLimitError(refusal);
 
     let slot;
     try {
       slot = this.allocator.allocate();
     } catch (err) {
-      if (err instanceof NoSlotAvailableError) throw new SessionLimitError(this.config.maxSessions);
+      if (err instanceof NoSlotAvailableError) {
+        throw new SessionLimitError(
+          `Maximum number of concurrent browser sessions reached (${this.config.maxSessions})`
+        );
+      }
       throw err;
     }
 

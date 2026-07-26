@@ -585,6 +585,40 @@ test.describe("step execution", () => {
     expect(state.panelClicks, "no panel may have been confirmed").toEqual([]);
   });
 
+  test("refuses a blank popup it cannot tell apart, by counting the tabs", async () => {
+    // A popup opened with a bare window.open() has no address, so it is about:blank
+    // both when recorded and when run: the origin cannot distinguish the intruder
+    // from the real one. What still gives it away is arithmetic — the run has more
+    // tabs open than the recorded workflow ever refers to, so the numbering has
+    // certainly shifted and acting on tab-1 would be a guess.
+    const workflow = await client.createWorkflow(
+      `Popup vuoto ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/tabs/blank`
+    );
+
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai al pannello", value: `${TEST_WEB_INTERNAL_URL}/tabs/blank` }),
+      step({ type: "click", name: "Apri il pannello", selector: sel("css", "#open-blank") }),
+      step({ type: "switchPage", name: "Passa al pannello", value: "tab-1" }),
+      step({
+        type: "click",
+        name: "Conferma dal pannello",
+        pageId: "tab-1",
+        // Recorded on a blank popup: no origin to compare against.
+        selector: { ...sel("css", "#panel-action"), pageId: "tab-1" }
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+
+    expect(execution.status, "an unverifiable tab must stop the run").toBe("failed");
+    expect(execution.errorMessage ?? "").toMatch(/tab/i);
+
+    const state = await getTestWebState();
+    expect(state.panelClicks, "no panel may have been confirmed").toEqual([]);
+  });
+
   test("still acts on a tab whose origin is the recorded one", async () => {
     // The check must not stand in the way of the ordinary case: one tab, same origin.
     const workflow = await client.createWorkflow(

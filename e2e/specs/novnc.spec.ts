@@ -80,6 +80,31 @@ test.describe("noVNC stream", () => {
     }
   });
 
+  test("refuses the stream once the user has logged out", async () => {
+    // Logging out bumps the owner's token version, which retires the cookie. This
+    // route verifies the cookie itself instead of going through requireAuth, so it
+    // did not know about that: the same decision made in two places drifted, and the
+    // stream stayed open to a revoked cookie for as long as the VNC token lived.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/login`);
+    try {
+      const url = `${APP_BASE_URL.replace(/^http/, "ws")}${session.vncPath}`;
+      const cookie = client.sessionCookie;
+
+      const before = await readFirstFrame(url, cookie);
+      expect(before.kind, "the stream must work while logged in").toBe("data");
+
+      await client.logout();
+
+      const after = await readFirstFrame(url, cookie);
+      expect(after.kind).toBe("closed");
+      expect((after as { code: number }).code).toBe(4401);
+    } finally {
+      // The cookie is gone, so a fresh login is needed to clean up.
+      await client.login();
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
   test("refuses a token issued for a different session", async () => {
     const first = await client.createSession(`${TEST_WEB_INTERNAL_URL}/login`);
     const second = await client.createSession(`${TEST_WEB_INTERNAL_URL}/dashboard`);

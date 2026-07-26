@@ -71,6 +71,20 @@ function rowToStep(row: {
 }
 
 /**
+ * How many tabs beyond `main` the workflow refers to, counting both the pages steps
+ * target and the ones switchPage names. Every tab opened while recording produced a
+ * switchPage step, so this is what the recording saw.
+ */
+function countReferencedTabs(steps: Step[]): number {
+  const ids = new Set<string>();
+  for (const step of steps) {
+    if (step.pageId !== "main") ids.add(step.pageId);
+    if (step.type === "switchPage" && step.value && step.value !== "main") ids.add(step.value);
+  }
+  return ids.size;
+}
+
+/**
  * Runs one execution from start to finish.
  *
  * The execution stops at the first failing step: nothing after it is attempted,
@@ -234,6 +248,7 @@ export async function runExecution(
         allowPrivateTargets: config.allowPrivateTargets,
         allowedHosts: config.allowedTargetHosts
       },
+      expectedTabCount: countReferencedTabs(steps),
       uploadFixtureDir: config.uploadFixtureDir,
       artifactDir: config.artifactDir,
       executionId: input.executionId,

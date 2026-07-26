@@ -488,6 +488,47 @@ ${summary}`
     )
   );
 
+  /*
+    The harder half of the same problem: a popup opened with a bare window.open() has
+    no URL, so it stays about:blank at run time too and the origin of the tab that
+    took its number says nothing. The panel is written into it by script, exactly as
+    older payment and confirmation popups do.
+  */
+  app.get("/tabs/blank", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Popup vuoto - test-web",
+        `<h1>Pannello senza URL</h1>
+<button id="open-blank" onclick="openPanel()">Apri il pannello</button>
+<script>
+  // The panel is built by the opener inside a popup that has no address of its own,
+  // the way older payment and confirmation popups do. The click reports which panel
+  // it was through the opener's own fetch, so telling them apart needs no CORS.
+  function buildPanel(win, label) {
+    var doc = win.document;
+    var button = doc.createElement("button");
+    button.id = "panel-action";
+    button.textContent = "Conferma dal pannello";
+    button.addEventListener("click", function () {
+      fetch("/api/test/panel-click", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ origin: label })
+      });
+    });
+    (doc.body || doc.documentElement).appendChild(button);
+  }
+  function openPanel() {
+    buildPanel(window.open("", "_blank"), location.origin);
+  }
+  // Runs before anything the workflow does, so it takes tab-1 — and it is blank, so
+  // nothing about its address tells it apart from the real one.
+  buildPanel(window.open("", "_blank"), "intruder");
+</script>`
+      )
+    )
+  );
+
   app.get("/tabs/panel", async (_request, reply) =>
     reply.type("text/html").send(
       page(

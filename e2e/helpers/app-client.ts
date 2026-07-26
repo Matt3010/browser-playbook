@@ -94,6 +94,11 @@ export class AppClient {
     });
   }
 
+  /** Ends the session on the server: the cookie it held stops being accepted. */
+  logout() {
+    return this.ok<{ ok: boolean }>("POST", "/api/auth/logout");
+  }
+
   me() {
     return this.ok<{ id: string; email: string }>("GET", "/api/auth/me");
   }

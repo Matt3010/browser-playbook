@@ -15,6 +15,13 @@ export interface StepExecutionContext {
   uploadFixtureDir: string;
   artifactDir: string;
   executionId: string;
+  /**
+   * How many tabs beyond `main` the workflow ever refers to. When a step targets a
+   * tab whose recorded origin cannot identify it — a popup opened with no address
+   * stays about:blank both times — this is what still gives away a shifted
+   * numbering: more tabs are open than the workflow ever mentions.
+   */
+  expectedTabCount: number;
   /** Called for artifacts produced by a step (e.g. a downloaded file). */
   onArtifact: (artifact: { type: string; path: string }) => Promise<void>;
   log: (level: "info" | "warn" | "error", message: string) => Promise<void>;
@@ -71,15 +78,33 @@ function pageFor(step: Step, ctx: StepExecutionContext): Page {
   // numbering and `tab-1` comes to mean a different document — which accepts the
   // action in silence. `main` is exempt: it is the initial page, and its own origin
   // legitimately changes as the workflow navigates.
-  if (step.pageOrigin && step.pageId !== "main") {
+  if (step.pageId !== "main") {
     const actual = originOf(page.url());
-    if (actual && actual !== step.pageOrigin) {
+    if (step.pageOrigin && actual && actual !== step.pageOrigin) {
       throw new StepExecutionError(
         `Step '${step.name}' targets page '${step.pageId}', which was recorded on ` +
           `${step.pageOrigin} but is now showing ${actual}. A tab the recording did not ` +
           `see has taken that number, so the workflow stops instead of acting on the ` +
           `wrong document.`
       );
+    }
+
+    // A popup opened with no address of its own is about:blank when recorded and
+    // about:blank when replayed, so the origin cannot tell one from another. What
+    // still can is counting: if more tabs are open than the workflow ever refers to,
+    // one of them is unaccounted for and the numbering may already have shifted.
+    // Acting would be a guess, and this codebase does not guess about which document
+    // it operates on.
+    if (!step.pageOrigin || !actual) {
+      const openTabs = ctx.session.listPages().filter((p) => p.pageId !== "main").length;
+      if (openTabs > ctx.expectedTabCount) {
+        throw new StepExecutionError(
+          `Step '${step.name}' targets page '${step.pageId}', whose address identifies ` +
+            `nothing (${page.url() || "about:blank"}), and ${openTabs} tabs are open while ` +
+            `the workflow only ever refers to ${ctx.expectedTabCount}. One of them is a tab ` +
+            `the recording never saw, so the numbering cannot be trusted and the workflow stops.`
+        );
+      }
     }
   }
 

@@ -8,6 +8,14 @@ const ConfigSchema = z.object({
   redisUrl: z.string().min(1),
   credentialsEncKey: z.string().min(16),
   maxSessions: z.coerce.number().int().min(1).default(4),
+  /**
+   * Per-user cap on concurrent sessions, so one user cannot take every slot of a
+   * shared instance. 0 means no separate cap, which is the default: on a
+   * single-user instance a cap below the global one would make the owner's own
+   * scheduled run fail while they are recording, since an execution holds a
+   * session of its own.
+   */
+  maxSessionsPerUser: z.coerce.number().int().min(0).default(0),
   sessionTimeoutMs: z.coerce.number().int().default(900_000),
   /**
    * A session driven from the UI is closed after this long without any request
@@ -46,6 +54,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     redisUrl: env.REDIS_URL,
     credentialsEncKey: env.CREDENTIALS_ENC_KEY,
     maxSessions: env.WORKER_MAX_SESSIONS,
+    maxSessionsPerUser: env.WORKER_MAX_SESSIONS_PER_USER,
     sessionTimeoutMs: env.BROWSER_SESSION_TIMEOUT_MS,
     sessionIdleTimeoutMs: env.BROWSER_SESSION_IDLE_TIMEOUT_MS,
     displayRangeStart: env.DISPLAY_RANGE_START,
