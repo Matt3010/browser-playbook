@@ -178,6 +178,10 @@ export class AppClient {
     );
   }
 
+  cancelExecution(id: string) {
+    return this.request("POST", `/api/executions/${id}/cancel`);
+  }
+
   getExecution(id: string) {
     return this.ok<Execution>("GET", `/api/executions/${id}`);
   }

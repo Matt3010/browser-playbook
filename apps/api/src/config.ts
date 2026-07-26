@@ -14,6 +14,8 @@ const ConfigSchema = z.object({
   allowPrivateTargets: z.boolean().default(false),
   allowedTargetHosts: z.array(z.string()).default([]),
   rateLimitMax: z.coerce.number().int().default(300),
+  /** Where execution artifacts live; shared with the worker through a volume. */
+  artifactDir: z.string().default("/data/artifacts"),
   registerRateLimitMax: z.coerce.number().int().default(10),
   loginRateLimitMax: z.coerce.number().int().default(20),
   logLevel: z.string().default("info")
@@ -39,6 +41,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       .map((h) => h.trim().toLowerCase())
       .filter(Boolean),
     rateLimitMax: env.RATE_LIMIT_MAX,
+    artifactDir: env.ARTIFACT_DIR,
     registerRateLimitMax: env.REGISTER_RATE_LIMIT_MAX,
     loginRateLimitMax: env.LOGIN_RATE_LIMIT_MAX,
     logLevel: env.LOG_LEVEL

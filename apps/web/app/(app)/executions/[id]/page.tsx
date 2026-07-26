@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { api, type Execution, type ExecutionLog } from "@/lib/api";
+import { api, ApiError, type Execution, type ExecutionLog } from "@/lib/api";
 
 const STATUS_STYLE: Record<string, string> = {
   queued: "bg-slate-100 text-slate-700",
@@ -18,6 +18,8 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
   const executionId = params.id;
   const [execution, setExecution] = useState<Execution | null>(null);
   const [logs, setLogs] = useState<ExecutionLog[]>([]);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const seen = useRef(new Set<string>());
 
   // Initial snapshot, including logs already stored.
@@ -63,6 +65,20 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
     return () => source.close();
   }, [executionId]);
 
+  /** Stops a run that is still queued or in progress, releasing its browser. */
+  async function cancel() {
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      const updated = await api.post<Execution>(`/executions/${executionId}/cancel`);
+      setExecution((current) => (current ? { ...current, ...updated } : updated));
+    } catch (err) {
+      setCancelError(err instanceof ApiError ? err.message : "Errore inatteso");
+    } finally {
+      setCancelling(false);
+    }
+  }
+
   if (!execution) {
     return <p className="text-sm text-slate-500">Caricamento esecuzione...</p>;
   }
@@ -83,11 +99,27 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
           {execution.status}
         </span>
         {!TERMINAL.includes(execution.status) ? (
-          <span className="text-xs text-slate-500" data-testid="execution-live">
-            aggiornamento live
-          </span>
+          <>
+            <span className="text-xs text-slate-500" data-testid="execution-live">
+              aggiornamento live
+            </span>
+            <button
+              className="btn-danger"
+              onClick={cancel}
+              disabled={cancelling}
+              data-testid="cancel-execution"
+            >
+              {cancelling ? "Annullamento..." : "Annulla esecuzione"}
+            </button>
+          </>
         ) : null}
       </div>
+
+      {cancelError ? (
+        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700" data-testid="cancel-error">
+          {cancelError}
+        </p>
+      ) : null}
 
       <div className="card grid gap-2 text-sm sm:grid-cols-2">
         <p>

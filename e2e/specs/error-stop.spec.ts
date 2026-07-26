@@ -272,3 +272,88 @@ test.describe("stop at the first error", () => {
     expect(scheduled.status).toBe(409);
   });
 });
+
+test.describe("cancelling a run in progress", () => {
+  let client: AppClient;
+
+  test.beforeEach(async () => {
+    await resetTestWeb();
+    client = new AppClient();
+    await client.login();
+  });
+
+  test("stops a running execution, releases its browser and skips the rest", async () => {
+    const workflow = await client.createWorkflow(
+      `Da annullare ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/wizard/step-1`
+    );
+
+    // A long wait gives a deterministic window in which to cancel, and the steps
+    // after it would submit the wizard if they ever ran.
+    await client.putSteps(workflow.id, [
+      gotoStep(`${TEST_WEB_INTERNAL_URL}/wizard/step-1`),
+      step({ type: "wait", name: "Attendi a lungo", value: "20000", timeoutMs: 30000 }),
+      step({
+        type: "fill",
+        name: "Inserisci Nome",
+        value: "Non deve arrivare",
+        selector: { strategy: "id", value: "fullname", fallback: null, pageId: "main", frame: null }
+      }),
+      step({
+        type: "click",
+        name: "Clicca Continua",
+        selector: {
+          strategy: "role",
+          role: "button",
+          name: "Continua",
+          fallback: "button[type=submit]",
+          pageId: "main",
+          frame: null
+        }
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+
+    // Wait until it is really running, not merely queued.
+    await expect
+      .poll(async () => (await client.getExecution(started.id)).status, { timeout: 60_000 })
+      .toBe("running");
+
+    const response = await client.cancelExecution(started.id);
+    expect(response.status).toBe(200);
+
+    const execution = await client.waitForExecution(started.id, 90_000);
+    expect(execution.status).toBe("cancelled");
+    expect(execution.finishedAt).not.toBeNull();
+
+    // The steps after the cancellation never ran.
+    const state = await getTestWebState();
+    expect(state.wizardSubmissions).toHaveLength(0);
+
+    const messages = (execution.logs ?? []).map((l) => l.message).join("\n");
+    expect(messages).toMatch(/cancelled/i);
+
+    // The browser slot is free again: a new session can be created immediately.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/login`);
+    expect(session.state).toBe("ready");
+    await client.closeSession(session.sessionId);
+  });
+
+  test("refuses to cancel a run that already finished", async () => {
+    const workflow = await client.createWorkflow(
+      `Gia finita ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [gotoStep(`${TEST_WEB_INTERNAL_URL}/elements`)]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+    expect(execution.status).toBe("completed");
+
+    const response = await client.cancelExecution(started.id);
+    expect(response.status).toBe(409);
+    // The completed run keeps its outcome.
+    expect((await client.getExecution(started.id)).status).toBe("completed");
+  });
+});

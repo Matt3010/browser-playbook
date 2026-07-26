@@ -207,6 +207,10 @@ export async function runExecution(
     };
 
     for (const [index, step] of steps.entries()) {
+      if (await wasCancelled(prisma, input.executionId)) {
+        await writeLog("warn", "Execution cancelled: the remaining steps are not run");
+        return { status: "failed", errorMessage: "Execution cancelled" };
+      }
       const stepStart = Date.now();
       await writeLog("info", `Step ${index + 1}/${steps.length}: ${step.name} (${step.type})`, step.id);
 
@@ -286,12 +290,26 @@ function firstUrl(steps: Step[]): string | null {
   return null;
 }
 
+/**
+ * True when the user cancelled the execution while it was running. The API sets
+ * the status and closes the browser, which makes the current step fail; that
+ * failure must not overwrite the cancellation with a generic error.
+ */
+async function wasCancelled(prisma: PrismaClient, executionId: string): Promise<boolean> {
+  const current = await prisma.execution.findUnique({
+    where: { id: executionId },
+    select: { status: true }
+  });
+  return current?.status === "cancelled";
+}
+
 async function finish(
   prisma: PrismaClient,
   executionId: string,
   status: Extract<ExecutionStatus, "completed" | "failed">,
   extra: { errorMessage?: string; failedStepId?: string; currentUrl?: string | null }
 ): Promise<void> {
+  if (await wasCancelled(prisma, executionId)) return;
   await prisma.execution.update({
     where: { id: executionId },
     data: {
@@ -368,6 +386,11 @@ async function handleFailure(input: FailureInput): Promise<void> {
   } catch (err) {
     input.log.warn({ err }, "Could not capture the error screenshot");
     screenshotPath = null;
+  }
+
+  if (await wasCancelled(prisma, executionId)) {
+    input.log.info("Execution was cancelled while this step was running");
+    return;
   }
 
   await prisma.execution.update({

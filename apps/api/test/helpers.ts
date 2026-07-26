@@ -108,7 +108,9 @@ export interface TestContext {
   worker: FakeWorkerClient;
 }
 
-export async function createTestContext(): Promise<TestContext> {
+export async function createTestContext(
+  overrides: NodeJS.ProcessEnv = {}
+): Promise<TestContext> {
   const config = loadConfig({
     ...process.env,
     NODE_ENV: "test",
@@ -120,7 +122,8 @@ export async function createTestContext(): Promise<TestContext> {
     REGISTER_RATE_LIMIT_MAX: "100000",
     LOGIN_RATE_LIMIT_MAX: "100000",
     // Quiet by default, but overridable so a failing test can be diagnosed.
-    LOG_LEVEL: process.env.LOG_LEVEL ?? "silent"
+    LOG_LEVEL: process.env.LOG_LEVEL ?? "silent",
+    ...overrides
   } as NodeJS.ProcessEnv);
 
   const prisma = new PrismaClient({ datasources: { db: { url: config.databaseUrl } } });

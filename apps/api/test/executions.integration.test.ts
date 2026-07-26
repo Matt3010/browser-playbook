@@ -452,3 +452,111 @@ describe("references to values that do not exist", () => {
     expect(response.statusCode).toBe(409);
   });
 });
+
+describe("cancelling an execution", () => {
+  it("cancels a queued execution and removes its job from the queue", async () => {
+    const workflow = await readyWorkflow("Cancellabile");
+    const started = (
+      await ctx.app.inject({
+        method: "POST",
+        url: `/api/workflows/${workflow.id}/executions`,
+        headers: { cookie: user.cookie }
+      })
+    ).json<{ id: string }>();
+
+    expect(await ctx.queue.getJobState(started.id)).not.toBeNull();
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/executions/${started.id}/cancel`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().status).toBe("cancelled");
+
+    // The job is gone, so it can never start later.
+    expect(await ctx.queue.getJobState(started.id)).toBeNull();
+
+    const stored = await ctx.prisma.execution.findUnique({ where: { id: started.id } });
+    expect(stored!.status).toBe("cancelled");
+    expect(stored!.finishedAt).not.toBeNull();
+  });
+
+  it("cancels a running execution and closes its browser session", async () => {
+    const workflow = await readyWorkflow("In corso");
+    const execution = await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, status: "running", startedAt: new Date() }
+    });
+    // The runner names the session after the execution.
+    await ctx.worker.createSession({
+      sessionId: execution.id,
+      userId: user.id,
+      startUrl: "http://test-web:3001/login",
+      timeoutMs: 60_000
+    });
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/executions/${execution.id}/cancel`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(200);
+
+    const stored = await ctx.prisma.execution.findUnique({ where: { id: execution.id } });
+    expect(stored!.status).toBe("cancelled");
+
+    // The browser must be released, not left holding a slot until it times out.
+    expect(ctx.worker.sessions.get(execution.id)!.state).toBe("closed");
+  });
+
+  it("refuses to cancel an execution that already finished", async () => {
+    const workflow = await readyWorkflow("Finita");
+    for (const status of ["completed", "failed", "cancelled"] as const) {
+      const execution = await ctx.prisma.execution.create({
+        data: { workflowId: workflow.id, status, finishedAt: new Date() }
+      });
+      const response = await ctx.app.inject({
+        method: "POST",
+        url: `/api/executions/${execution.id}/cancel`,
+        headers: { cookie: user.cookie }
+      });
+      expect(response.statusCode, status).toBe(409);
+    }
+  });
+
+  it("does not let a user cancel another user's execution", async () => {
+    const workflow = await readyWorkflow("Altrui");
+    const execution = await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, status: "running", startedAt: new Date() }
+    });
+    const other = await registerUser(ctx.app, "other@example.com");
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/executions/${execution.id}/cancel`,
+      headers: { cookie: other.cookie },
+      payload: {}
+    });
+    expect(response.statusCode).toBe(404);
+    const stored = await ctx.prisma.execution.findUnique({ where: { id: execution.id } });
+    expect(stored!.status).toBe("running");
+  });
+
+  it("records why the execution stopped", async () => {
+    const workflow = await readyWorkflow("Con log");
+    const execution = await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, status: "running", startedAt: new Date() }
+    });
+
+    await ctx.app.inject({
+      method: "POST",
+      url: `/api/executions/${execution.id}/cancel`,
+      headers: { cookie: user.cookie }
+    });
+
+    const logs = await ctx.prisma.executionLog.findMany({
+      where: { executionId: execution.id }
+    });
+    expect(logs.some((l) => /cancelled/i.test(l.message))).toBe(true);
+  });
+});

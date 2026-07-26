@@ -315,6 +315,8 @@ GET  /api/test/state        submitted data, uploads, login attempts
 * Only Chromium. Only linear workflows: no branches, conditions, loops,
   sub-workflows or parallel execution.
 * Only one future run per schedule; no recurring schedules or cron.
+* A run in progress can be cancelled, which stops it at the current step and
+  releases its browser. There is no pause or resume.
 * No automatic retries, no recovery, no resume from the failing step, no selector
   auto-healing.
 * Cross-origin iframes are not supported; same-origin frames are.
@@ -326,7 +328,9 @@ GET  /api/test/state        submitted data, uploads, login attempts
   worker container, not by one container per session.
 * Live logs are delivered by SSE polling the log table every 500 ms, not by a
   pub/sub bus.
-* Artifacts live on a Docker volume; there is no external object storage.
+* Artifacts live on a Docker volume; there is no external object storage. They are
+  removed when their workflow is deleted, but a run that is simply old keeps its
+  screenshots forever: there is no retention policy.
 * `WORKER_MAX_SESSIONS` bounds concurrency; there is no queue for browser
   sessions, so a request beyond the limit is refused.
 

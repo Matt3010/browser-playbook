@@ -1,3 +1,5 @@
+import { rm } from "fs/promises";
+import path from "path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { assertSafeTargetUrl } from "@app/shared";
@@ -119,7 +121,30 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
   app.delete<{ Params: { id: string } }>("/:id", async (request, reply) => {
     const { userId } = currentUser(request);
     const workflow = await loadOwnedWorkflow(app, userId, request.params.id);
+
+    // The database rows disappear with the cascade, but the screenshots and
+    // downloaded files live on a volume and would stay there forever.
+    const executions = await app.prisma.execution.findMany({
+      where: { workflowId: workflow.id },
+      select: { id: true }
+    });
+
     await app.prisma.workflow.delete({ where: { id: workflow.id } });
+
+    const root = path.resolve(app.config.artifactDir);
+    for (const execution of executions) {
+      const directory = path.resolve(root, execution.id);
+      // Never step outside the artifact root, whatever the id looks like.
+      if (directory !== path.join(root, execution.id)) continue;
+      if (!directory.startsWith(root + path.sep)) continue;
+      try {
+        await rm(directory, { recursive: true, force: true, maxRetries: 2 });
+      } catch (err) {
+        // The workflow is already gone; a leftover directory is not worth failing on.
+        request.log.warn({ err, directory }, "Could not remove an execution artifact directory");
+      }
+    }
+
     return reply.code(204).send();
   });
 

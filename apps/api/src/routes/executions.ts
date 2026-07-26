@@ -11,14 +11,12 @@ import {
 } from "@app/workflow-schema";
 import { requireAuth, currentUser } from "../auth";
 import { loadOwnedWorkflow, loadOwnedExecution } from "../ownership";
+import { WorkerHttpError } from "../worker-client";
 
 const ListQuerySchema = z.object({
   workflowId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50)
 });
-
-/** Artifacts live on a shared volume; only paths inside it may be served. */
-const ARTIFACT_ROOT = process.env.ARTIFACT_DIR ?? "/data/artifacts";
 
 /**
  * Loads the names of the values a workflow can reference. Kept separate so both
@@ -111,6 +109,70 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
     }
 
     return reply.code(202).send(execution);
+  });
+
+  /**
+   * Stops an execution that has not finished yet.
+   *
+   * A queued one only needs its job removed. A running one also has a browser
+   * session named after it, which must be released rather than left holding a
+   * slot until its lifetime expires. The runner notices the `cancelled` status
+   * and leaves it alone instead of overwriting it with a failure.
+   */
+  app.post<{ Params: { id: string } }>("/executions/:id/cancel", async (request, reply) => {
+    const { userId } = currentUser(request);
+    const execution = await loadOwnedExecution(app, userId, request.params.id);
+
+    if (["completed", "failed", "cancelled"].includes(execution.status)) {
+      return reply
+        .code(409)
+        .send({ error: `Cannot cancel an execution in state '${execution.status}'` });
+    }
+
+    const updated = await app.prisma.execution.update({
+      where: { id: execution.id },
+      data: {
+        status: "cancelled",
+        finishedAt: new Date(),
+        errorMessage: "Cancelled by the user"
+      }
+    });
+
+    await app.prisma.executionLog.create({
+      data: {
+        executionId: execution.id,
+        level: "warn",
+        message: "Execution cancelled by the user"
+      }
+    });
+
+    // Remove the queue job if it has not been picked up yet.
+    try {
+      await app.queue.cancel(execution.id);
+    } catch (err) {
+      request.log.warn({ err, executionId: execution.id }, "Could not remove the queued job");
+    }
+
+    // Release the browser, if one is already running for this execution.
+    try {
+      await app.worker.closeSession(execution.id);
+    } catch (err) {
+      if (!(err instanceof WorkerHttpError && err.statusCode === 404)) {
+        request.log.warn(
+          { err, executionId: execution.id },
+          "Could not close the browser session of a cancelled execution"
+        );
+      }
+    }
+
+    if (execution.scheduleId) {
+      await app.prisma.schedule.updateMany({
+        where: { id: execution.scheduleId, status: { in: ["scheduled", "queued"] } },
+        data: { status: "cancelled" }
+      });
+    }
+
+    return updated;
   });
 
   app.get("/executions", async (request, reply) => {
@@ -241,7 +303,7 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
     if (!artifact) return reply.code(404).send({ error: "Artifact not found" });
 
     const resolved = path.resolve(artifact.path);
-    if (!resolved.startsWith(path.resolve(ARTIFACT_ROOT))) {
+    if (!resolved.startsWith(path.resolve(app.config.artifactDir))) {
       return reply.code(400).send({ error: "Artifact path outside the artifact directory" });
     }
     try {
