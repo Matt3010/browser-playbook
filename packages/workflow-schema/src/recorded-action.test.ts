@@ -1,0 +1,210 @@
+import { describe, expect, it } from "vitest";
+import { actionToStep, actionsToSteps, credentialNameFromElement } from "./recorded-action";
+import type { RecordedAction } from "./recorded-action";
+
+let counter = 0;
+const newId = () => `00000000-0000-4000-8000-${String(++counter).padStart(12, "0")}`;
+
+function action(partial: Partial<RecordedAction>): RecordedAction {
+  return {
+    kind: "click",
+    pageId: "main",
+    timestamp: Date.now(),
+    ...partial
+  } as RecordedAction;
+}
+
+const emailField = {
+  tag: "input",
+  type: "email",
+  role: "textbox",
+  accessibleName: "Email",
+  label: "Email",
+  nameAttr: "email",
+  unique: { role: true, label: true, name: true }
+};
+
+const passwordField = {
+  tag: "input",
+  type: "password",
+  label: "Password",
+  nameAttr: "password",
+  unique: { label: true, name: true }
+};
+
+describe("recorded action to step conversion", () => {
+  it("converts a navigation into a goto step", () => {
+    const result = actionToStep(action({ kind: "navigate", url: "https://example.com/login" }), {
+      newId
+    });
+    expect(result!.step.type).toBe("goto");
+    expect(result!.step.value).toBe("https://example.com/login");
+    expect(result!.step.name).toBe("Vai a https://example.com/login");
+  });
+
+  it("converts a fill into a fill step with a role selector", () => {
+    const result = actionToStep(
+      action({ kind: "fill", element: emailField, value: "test@example.com" }),
+      { newId }
+    );
+    expect(result!.step.type).toBe("fill");
+    expect(result!.step.selector!.strategy).toBe("role");
+    expect(result!.step.value).toBe("test@example.com");
+    expect(result!.credential).toBeUndefined();
+  });
+
+  it("turns a password input into a credential reference and never stores the literal in the step", () => {
+    const result = actionToStep(
+      action({
+        kind: "fill",
+        element: passwordField,
+        value: "TestPassword123!",
+        isPassword: true
+      }),
+      { newId }
+    );
+    expect(result!.step.value).toBe("{{credentials.password}}");
+    expect(JSON.stringify(result!.step)).not.toContain("TestPassword123!");
+    expect(result!.credential).toEqual({ name: "password", value: "TestPassword123!" });
+  });
+
+  it("maps every recorded kind to the expected step type", () => {
+    const cases: Array<[RecordedAction, string]> = [
+      [action({ kind: "click", element: emailField }), "click"],
+      [action({ kind: "submit", element: emailField }), "click"],
+      [action({ kind: "select", element: emailField, value: "IT" }), "select"],
+      [action({ kind: "check", element: emailField }), "check"],
+      [action({ kind: "uncheck", element: emailField }), "uncheck"],
+      [action({ kind: "press", key: "Enter" }), "press"],
+      [action({ kind: "wait", value: "500" }), "wait"],
+      [action({ kind: "newTab", value: "tab-1" }), "switchPage"],
+      [action({ kind: "switchTab", value: "main" }), "switchPage"],
+      [action({ kind: "download", element: emailField }), "download"],
+      [action({ kind: "upload", element: emailField, value: "/fixtures/a.txt" }), "upload"]
+    ];
+    for (const [input, expected] of cases) {
+      const result = actionToStep(input, { newId });
+      expect(result, `${input.kind} should convert`).not.toBeNull();
+      expect(result!.step.type, input.kind).toBe(expected);
+    }
+  });
+
+  it("keeps the suggested filename on a download step", () => {
+    const result = actionToStep(
+      action({ kind: "download", element: emailField, value: "sample.txt" }),
+      { newId }
+    );
+    expect(result!.step.type).toBe("download");
+    expect(result!.step.value).toBe("sample.txt");
+  });
+
+  it("keeps the file name on an upload step", () => {
+    const result = actionToStep(
+      action({ kind: "upload", element: emailField, value: "fixture.txt" }),
+      { newId }
+    );
+    expect(result!.step.value).toBe("fixture.txt");
+  });
+
+  it("refuses to record an action whose element has no unique selector", () => {
+    const ambiguous = { tag: "button", text: "OK", unique: { text: false } };
+    expect(actionToStep(action({ kind: "click", element: ambiguous }), { newId })).toBeNull();
+  });
+
+  it("preserves the logical page id", () => {
+    const result = actionToStep(
+      action({ kind: "click", element: emailField, pageId: "tab-2" }),
+      { newId }
+    );
+    expect(result!.step.pageId).toBe("tab-2");
+    expect(result!.step.selector!.pageId).toBe("tab-2");
+  });
+
+  it("derives credential names from the field", () => {
+    expect(credentialNameFromElement({ tag: "input", nameAttr: "user-password" })).toBe(
+      "user_password"
+    );
+    expect(credentialNameFromElement({ tag: "input", label: "Password" })).toBe("password");
+    expect(credentialNameFromElement(null)).toBe("password");
+  });
+});
+
+describe("action stream to step list", () => {
+  it("builds an ordered login step list", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "navigate", url: "http://test-web:3001/login" }),
+        action({ kind: "fill", element: emailField, value: "test@example.com" }),
+        action({
+          kind: "fill",
+          element: passwordField,
+          value: "TestPassword123!",
+          isPassword: true
+        }),
+        action({
+          kind: "click",
+          element: {
+            tag: "button",
+            role: "button",
+            accessibleName: "Login",
+            unique: { role: true }
+          }
+        })
+      ],
+      { newId }
+    );
+
+    expect(result.steps.map((s) => s.type)).toEqual(["goto", "fill", "fill", "click"]);
+    expect(result.credentials).toEqual([{ name: "password", value: "TestPassword123!" }]);
+    expect(result.skipped).toHaveLength(0);
+    expect(JSON.stringify(result.steps)).not.toContain("TestPassword123!");
+  });
+
+  it("collapses consecutive fills on the same field to the final value", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "fill", element: emailField, value: "t" }),
+        action({ kind: "fill", element: emailField, value: "te" }),
+        action({ kind: "fill", element: emailField, value: "test@example.com" })
+      ],
+      { newId }
+    );
+    expect(result.steps).toHaveLength(1);
+    expect(result.steps[0].value).toBe("test@example.com");
+  });
+
+  it("does not collapse fills on different fields", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "fill", element: emailField, value: "a" }),
+        action({ kind: "fill", element: passwordField, value: "b" })
+      ],
+      { newId }
+    );
+    expect(result.steps).toHaveLength(2);
+  });
+
+  it("de-duplicates repeated navigation to the same URL", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "navigate", url: "http://test-web:3001/login" }),
+        action({ kind: "navigate", url: "http://test-web:3001/login" }),
+        action({ kind: "navigate", url: "http://test-web:3001/dashboard" })
+      ],
+      { newId }
+    );
+    expect(result.steps).toHaveLength(2);
+  });
+
+  it("collects skipped actions instead of guessing a selector", () => {
+    const result = actionsToSteps(
+      [
+        action({ kind: "navigate", url: "http://test-web:3001/login" }),
+        action({ kind: "click", element: { tag: "div", text: "X", unique: { text: false } } })
+      ],
+      { newId }
+    );
+    expect(result.steps).toHaveLength(1);
+    expect(result.skipped).toHaveLength(1);
+  });
+});

@@ -1,0 +1,32 @@
+# Data stores for the Vitest integration suite, which runs on the host and
+# therefore needs reachable ports. They are deliberately on non-default ports so
+# they cannot collide with a local Postgres/Redis installation.
+#
+# The application stacks (docker-compose.yml and docker-compose.test.yml) never
+# publish their database ports.
+name: browser-automation-integration
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: integration_password
+      POSTGRES_DB: browser_automation_integration
+    ports:
+      - "${INTEGRATION_PG_PORT:-55432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d browser_automation_integration"]
+      interval: 3s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${INTEGRATION_REDIS_PORT:-56379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 5s
+      retries: 20

@@ -1,0 +1,25 @@
+{
+  "name": "@app/database",
+  "version": "0.1.0",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prisma:generate": "prisma generate",
+    "prisma:migrate:dev": "prisma migrate dev",
+    "prisma:migrate:deploy": "prisma migrate deploy",
+    "seed": "ts-node prisma/seed.ts"
+  },
+  "dependencies": {
+    "@app/shared": "workspace:*",
+    "@prisma/client": "5.20.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.7.4",
+    "prisma": "5.20.0",
+    "ts-node": "10.9.2",
+    "typescript": "5.6.3"
+  }
+}

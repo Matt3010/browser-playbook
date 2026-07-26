@@ -1,0 +1,22 @@
+{
+  "name": "@app/test-web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "ts-node src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@fastify/cookie": "9.4.0",
+    "@fastify/formbody": "7.4.0",
+    "@fastify/multipart": "8.3.0",
+    "fastify": "4.28.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.7.4",
+    "ts-node": "10.9.2",
+    "typescript": "5.6.3"
+  }
+}

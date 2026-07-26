@@ -1,0 +1,189 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  workflows     Workflow[]
+  credentials   Credential[]
+  notifications Notification[]
+
+  @@map("users")
+}
+
+enum WorkflowStatus {
+  draft
+  ready
+  disabled
+}
+
+model Workflow {
+  id        String         @id @default(uuid())
+  userId    String
+  name      String
+  startUrl  String
+  status    WorkflowStatus @default(draft)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  steps      WorkflowStep[]
+  schedules  Schedule[]
+  executions Execution[]
+
+  @@index([userId])
+  @@map("workflows")
+}
+
+model WorkflowStep {
+  id            String   @id @default(uuid())
+  workflowId    String
+  position      Int
+  type          String
+  name          String
+  pageId        String   @default("main")
+  selectorJson  Json
+  valueTemplate String?
+  timeoutMs     Int      @default(10000)
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  workflow Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+
+  @@index([workflowId])
+  @@map("workflow_steps")
+}
+
+enum CredentialKind {
+  variable
+  secret
+}
+
+/// Holds both plain workflow variables and secret credentials.
+/// `kind` is a minimal, documented extension of the MVP data model: the spec
+/// requires supporting both value types (section 8) but defines only this table.
+/// Values are encrypted at rest for both kinds; only `variable` values are ever
+/// readable back through the API.
+model Credential {
+  id             String         @id @default(uuid())
+  userId         String
+  name           String
+  kind           CredentialKind @default(secret)
+  encryptedValue String
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, name])
+  @@map("credentials")
+}
+
+enum ScheduleStatus {
+  scheduled
+  queued
+  cancelled
+  completed
+  failed
+}
+
+model Schedule {
+  id          String         @id @default(uuid())
+  workflowId  String
+  runAt       DateTime
+  timezone    String
+  status      ScheduleStatus @default(scheduled)
+  queueJobId  String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  workflow   Workflow    @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  executions Execution[]
+
+  @@index([workflowId])
+  @@map("schedules")
+}
+
+enum ExecutionStatus {
+  queued
+  starting
+  running
+  completed
+  failed
+  cancelled
+}
+
+model Execution {
+  id           String          @id @default(uuid())
+  workflowId   String
+  scheduleId   String?
+  status       ExecutionStatus @default(queued)
+  startedAt    DateTime?
+  finishedAt   DateTime?
+  errorMessage String?
+  failedStepId String?
+  currentUrl   String?
+  createdAt    DateTime        @default(now())
+  updatedAt    DateTime        @updatedAt
+
+  workflow Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  schedule Schedule?       @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  logs     ExecutionLog[]
+  artifacts Artifact[]
+
+  @@index([workflowId])
+  @@map("executions")
+}
+
+model ExecutionLog {
+  id          String   @id @default(uuid())
+  executionId String
+  stepId      String?
+  level       String
+  message     String
+  createdAt   DateTime @default(now())
+
+  execution Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId])
+  @@map("execution_logs")
+}
+
+model Artifact {
+  id          String   @id @default(uuid())
+  executionId String
+  type        String
+  path        String
+  createdAt   DateTime @default(now())
+
+  execution Execution @relation(fields: [executionId], references: [id], onDelete: Cascade)
+
+  @@index([executionId])
+  @@map("artifacts")
+}
+
+model Notification {
+  id        String    @id @default(uuid())
+  userId    String
+  type      String
+  title     String
+  message   String
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
+}

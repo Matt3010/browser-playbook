@@ -1,0 +1,32 @@
+{
+  "name": "browser-automation-mvp",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "eslint apps packages --ext .ts,.tsx",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test:unit": "pnpm -r --if-present run test:unit",
+    "test:integration": "pnpm -r --if-present run test:integration",
+    "build": "pnpm -r --if-present run build",
+    "db:generate": "pnpm --filter @app/database run prisma:generate",
+    "db:migrate": "pnpm --filter @app/database run prisma:migrate:deploy",
+    "db:seed": "pnpm --filter @app/database run seed",
+    "test:e2e": "playwright test -c e2e/playwright.config.ts",
+    "verify": "bash scripts/verify.sh"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.48.0",
+    "@types/node": "22.7.4",
+    "@types/ws": "8.5.12",
+    "@typescript-eslint/eslint-plugin": "8.8.0",
+    "@typescript-eslint/parser": "8.8.0",
+    "eslint": "8.57.1",
+    "typescript": "5.6.3",
+    "vitest": "2.1.4",
+    "ws": "8.18.0"
+  },
+  "packageManager": "pnpm@11.17.0"
+}

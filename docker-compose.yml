@@ -1,0 +1,159 @@
+name: browser-automation
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app_password_change_me}
+      POSTGRES_DB: ${POSTGRES_DB:-browser_automation}
+    # No published port: Postgres is only reachable on the internal network.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app} -d ${POSTGRES_DB:-browser_automation}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    # No published port: Redis is only reachable on the internal network.
+    volumes:
+      - redis-data:/data
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    command: >
+      sh -c "cd packages/database
+      && node_modules/.bin/prisma migrate deploy
+      && node_modules/.bin/ts-node prisma/seed.ts"
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://app:app_password_change_me@postgres:5432/browser_automation}
+      SEED_USER_EMAIL: ${SEED_USER_EMAIL:-test@example.com}
+      SEED_USER_PASSWORD: ${SEED_USER_PASSWORD:-TestPassword123!}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [internal]
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      DATABASE_URL: ${DATABASE_URL:-postgresql://app:app_password_change_me@postgres:5432/browser_automation}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      JWT_SECRET: ${JWT_SECRET:-change_me_super_secret_dev_only}
+      CREDENTIALS_ENC_KEY: ${CREDENTIALS_ENC_KEY:-0123456789abcdef0123456789abcdef}
+      SESSION_TOKEN_TTL_SECONDS: ${SESSION_TOKEN_TTL_SECONDS:-1800}
+      WORKER_URL: http://worker:5000
+      BROWSER_SESSION_TIMEOUT_MS: ${BROWSER_SESSION_TIMEOUT_MS:-900000}
+      ALLOW_PRIVATE_TARGETS: ${ALLOW_PRIVATE_TARGETS:-false}
+      ALLOWED_TARGET_HOSTS: ${ALLOWED_TARGET_HOSTS:-}
+      ARTIFACT_DIR: /data/artifacts
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - artifacts:/data/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal]
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/browser/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      WORKER_PORT: 5000
+      DATABASE_URL: ${DATABASE_URL:-postgresql://app:app_password_change_me@postgres:5432/browser_automation}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      CREDENTIALS_ENC_KEY: ${CREDENTIALS_ENC_KEY:-0123456789abcdef0123456789abcdef}
+      WORKER_MAX_SESSIONS: ${WORKER_MAX_SESSIONS:-4}
+      BROWSER_SESSION_TIMEOUT_MS: ${BROWSER_SESSION_TIMEOUT_MS:-900000}
+      DISPLAY_RANGE_START: ${DISPLAY_RANGE_START:-100}
+      DISPLAY_RANGE_END: ${DISPLAY_RANGE_END:-199}
+      VNC_PORT_RANGE_START: ${VNC_PORT_RANGE_START:-15900}
+      VNC_PORT_RANGE_END: ${VNC_PORT_RANGE_END:-15999}
+      ALLOW_PRIVATE_TARGETS: ${ALLOW_PRIVATE_TARGETS:-false}
+      ALLOWED_TARGET_HOSTS: ${ALLOWED_TARGET_HOSTS:-}
+      ARTIFACT_DIR: /data/artifacts
+      # Read-only directory baked into the image: an upload step can only send
+      # files from here, never arbitrary paths on the worker.
+      UPLOAD_FIXTURE_DIR: /opt/upload-fixtures
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    # Chromium needs more shared memory than the Docker default.
+    shm_size: 1gb
+    volumes:
+      - artifacts:/data/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    networks: [internal]
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [internal]
+
+  reverse-proxy:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    ports:
+      - "${PUBLIC_PORT:-8080}:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    networks: [internal]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/nginx-health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  artifacts:

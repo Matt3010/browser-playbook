@@ -1,0 +1,465 @@
+import { randomUUID } from "crypto";
+import Fastify, { type FastifyInstance } from "fastify";
+import cookie from "@fastify/cookie";
+import formbody from "@fastify/formbody";
+import multipart from "@fastify/multipart";
+import { page, escapeHtml } from "./layout";
+import {
+  configure,
+  getState,
+  resetState,
+  VALID_EMAIL,
+  VALID_PASSWORD,
+  type TestConfig
+} from "./state";
+
+const SESSION_COOKIE = "test_web_session";
+
+export async function buildTestWeb(): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: { level: process.env.LOG_LEVEL ?? "warn" }
+  });
+
+  await app.register(cookie);
+  await app.register(formbody);
+  await app.register(multipart, { limits: { fileSize: 1024 * 1024 } });
+
+  function isLoggedIn(request: { cookies: Record<string, string | undefined> }): boolean {
+    return Boolean(request.cookies[SESSION_COOKIE]);
+  }
+
+  // ---- health -------------------------------------------------------------
+
+  app.get("/health", async () => ({ status: "ok", service: "test-web" }));
+  app.get("/ready", async () => ({ status: "ready" }));
+
+  // ---- test control API ---------------------------------------------------
+
+  app.post("/api/test/reset", async () => {
+    resetState();
+    return { ok: true, config: getState().config };
+  });
+
+  app.post("/api/test/configure", async (request, reply) => {
+    const body = (request.body ?? {}) as Record<string, unknown>;
+    const patch: Partial<TestConfig> = {};
+
+    const numbers: Array<keyof TestConfig> = ["dashboardDelayMs", "delayedButtonMs"];
+    for (const key of numbers) {
+      if (key in body) {
+        const value = Number(body[key]);
+        if (!Number.isFinite(value) || value < 0 || value > 60_000) {
+          return reply.code(400).send({ error: `${key} must be between 0 and 60000` });
+        }
+        (patch as Record<string, unknown>)[key] = value;
+      }
+    }
+    const booleans: Array<keyof TestConfig> = ["missingElement", "failApi", "rejectLogin"];
+    for (const key of booleans) {
+      if (key in body) {
+        if (typeof body[key] !== "boolean") {
+          return reply.code(400).send({ error: `${key} must be a boolean` });
+        }
+        (patch as Record<string, unknown>)[key] = body[key];
+      }
+    }
+    return { ok: true, config: configure(patch) };
+  });
+
+  app.get("/api/test/state", async () => {
+    const state = getState();
+    return {
+      config: state.config,
+      wizardSubmissions: state.wizardSubmissions,
+      uploads: state.uploads,
+      loginAttempts: state.loginAttempts
+    };
+  });
+
+  // ---- 17.1 login ---------------------------------------------------------
+
+  function loginPage(error?: string): string {
+    return page(
+      "Login - test-web",
+      `
+<h1>Accedi</h1>
+${error ? `<p class="error" data-testid="login-error">${escapeHtml(error)}</p>` : ""}
+<form method="post" action="/login">
+  <label for="email">Email</label>
+  <input id="email" name="email" type="email" autocomplete="username" required>
+
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+  <div class="checkbox-row">
+    <input id="remember" name="remember" type="checkbox" value="1">
+    <label for="remember">Ricordami</label>
+  </div>
+
+  <button type="submit">Login</button>
+</form>`
+    );
+  }
+
+  app.get("/login", async (_request, reply) => reply.type("text/html").send(loginPage()));
+
+  app.post("/login", async (request, reply) => {
+    const state = getState();
+    state.loginAttempts += 1;
+    const body = (request.body ?? {}) as { email?: string; password?: string };
+
+    const ok =
+      !state.config.rejectLogin &&
+      body.email === VALID_EMAIL &&
+      body.password === VALID_PASSWORD;
+
+    if (!ok) {
+      return reply.code(401).type("text/html").send(loginPage("Credenziali errate"));
+    }
+    return reply
+      .setCookie(SESSION_COOKIE, randomUUID(), { path: "/", httpOnly: true })
+      .redirect("/dashboard");
+  });
+
+  app.post("/logout", async (_request, reply) =>
+    reply.clearCookie(SESSION_COOKIE, { path: "/" }).redirect("/login")
+  );
+
+  // ---- 17.2 dashboard -----------------------------------------------------
+
+  app.get("/dashboard", async (request, reply) => {
+    if (!isLoggedIn(request)) return reply.redirect("/login");
+    const delay = getState().config.dashboardDelayMs;
+
+    return reply.type("text/html").send(
+      page(
+        "Dashboard - test-web",
+        `
+<h1>Benvenuto</h1>
+<p data-testid="welcome">Benvenuto nella dashboard di test.</p>
+<nav>
+  <a href="/wizard/step-1" data-testid="link-wizard">Form multipagina</a>
+  <a href="/elements" data-testid="link-elements">Pagina elementi</a>
+</nav>
+<p id="late-element" data-testid="late-element" hidden>Contenuto caricato in ritardo</p>
+<form method="post" action="/logout"><button type="submit">Logout</button></form>
+<script>
+  setTimeout(function () {
+    var el = document.getElementById("late-element");
+    el.hidden = false;
+    el.setAttribute("data-loaded", "true");
+  }, ${delay});
+</script>`
+      )
+    );
+  });
+
+  // ---- 17.3 multipage wizard ---------------------------------------------
+
+  app.get("/wizard/step-1", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Wizard 1 - test-web",
+        `
+<h1>Step 1 di 2</h1>
+<form method="post" action="/wizard/step-1">
+  <label for="fullname">Nome</label>
+  <input id="fullname" name="name" type="text" required>
+
+  <label for="wizard-email">Email</label>
+  <input id="wizard-email" name="email" type="email" required>
+
+  <button type="submit">Continua</button>
+</form>`
+      )
+    )
+  );
+
+  app.post("/wizard/step-1", async (request, reply) => {
+    const body = (request.body ?? {}) as { name?: string; email?: string };
+    const draftId = request.cookies[SESSION_COOKIE] ?? randomUUID();
+    getState().wizardDrafts[draftId] = {
+      name: body.name ?? "",
+      email: body.email ?? ""
+    };
+    return reply
+      .setCookie(SESSION_COOKIE, draftId, { path: "/", httpOnly: true })
+      .redirect("/wizard/step-2");
+  });
+
+  app.get("/wizard/step-2", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Wizard 2 - test-web",
+        `
+<h1>Step 2 di 2</h1>
+<form method="post" action="/wizard/step-2">
+  <label for="plan">Piano</label>
+  <select id="plan" name="plan">
+    <option value="">Scegli...</option>
+    <option value="base">Base</option>
+    <option value="pro">Pro</option>
+    <option value="enterprise">Enterprise</option>
+  </select>
+
+  <div class="checkbox-row">
+    <input id="newsletter" name="newsletter" type="checkbox" value="1">
+    <label for="newsletter">Iscrivimi alla newsletter</label>
+  </div>
+
+  <label for="notes">Note</label>
+  <textarea id="notes" name="notes"></textarea>
+
+  <button type="submit">Completa</button>
+</form>`
+      )
+    )
+  );
+
+  app.post("/wizard/step-2", async (request, reply) => {
+    const body = (request.body ?? {}) as {
+      plan?: string;
+      newsletter?: string;
+      notes?: string;
+    };
+    const state = getState();
+    const draftId = request.cookies[SESSION_COOKIE] ?? "";
+    const draft = state.wizardDrafts[draftId] ?? { name: "", email: "" };
+
+    state.wizardSubmissions.push({
+      name: draft.name,
+      email: draft.email,
+      plan: body.plan ?? "",
+      newsletter: body.newsletter === "1",
+      notes: body.notes ?? "",
+      submittedAt: new Date().toISOString()
+    });
+    delete state.wizardDrafts[draftId];
+    return reply.redirect("/wizard/complete");
+  });
+
+  app.get("/wizard/complete", async (_request, reply) => {
+    const submissions = getState().wizardSubmissions;
+    const last = submissions[submissions.length - 1];
+
+    const summary = last
+      ? `<dl data-testid="summary">
+  <dt>Nome</dt><dd data-testid="summary-name">${escapeHtml(last.name)}</dd>
+  <dt>Email</dt><dd data-testid="summary-email">${escapeHtml(last.email)}</dd>
+  <dt>Piano</dt><dd data-testid="summary-plan">${escapeHtml(last.plan)}</dd>
+  <dt>Newsletter</dt><dd data-testid="summary-newsletter">${last.newsletter ? "si" : "no"}</dd>
+  <dt>Note</dt><dd data-testid="summary-notes">${escapeHtml(last.notes)}</dd>
+</dl>`
+      : `<p data-testid="summary-empty">Nessun invio registrato.</p>`;
+
+    return reply.type("text/html").send(
+      page(
+        "Wizard completato - test-web",
+        `<h1>Completato</h1>
+<p data-testid="complete-message">Form inviato correttamente.</p>
+${summary}`
+      )
+    );
+  });
+
+  // ---- 17.4 interactive elements -----------------------------------------
+
+  app.get("/elements", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Elementi - test-web",
+        `
+<h1>Elementi interattivi</h1>
+
+<label for="text-input">Campo testo</label>
+<input id="text-input" name="textField" type="text" placeholder="Scrivi qui">
+
+<label for="area">Area di testo</label>
+<textarea id="area" name="areaField" placeholder="Note libere"></textarea>
+
+<label for="choice">Selezione</label>
+<select id="choice" name="choiceField">
+  <option value="a">Opzione A</option>
+  <option value="b">Opzione B</option>
+</select>
+
+<div class="checkbox-row">
+  <input id="accept" name="accept" type="checkbox" value="1">
+  <label for="accept">Accetto i termini</label>
+</div>
+
+<fieldset>
+  <legend>Spedizione</legend>
+  <div class="checkbox-row">
+    <input id="ship-standard" name="shipping" type="radio" value="standard" checked>
+    <label for="ship-standard">Standard</label>
+  </div>
+  <div class="checkbox-row">
+    <input id="ship-express" name="shipping" type="radio" value="express">
+    <label for="ship-express">Express</label>
+  </div>
+</fieldset>
+
+<div class="row">
+  <button id="real-button" type="button" onclick="document.getElementById('clicked').textContent='clicked'">Bottone reale</button>
+  <span id="clicked" data-testid="clicked"></span>
+</div>
+
+<div class="row">
+  <a id="internal-link" href="/dashboard">Vai alla dashboard</a>
+  <a id="new-tab-link" href="/elements/popup" target="_blank" rel="noopener">Apri nuova tab</a>
+</div>
+
+<div class="row">
+  <div id="fake-button" role="button" tabindex="0"
+       onclick="document.getElementById('fake-clicked').textContent='fake-clicked'"
+       style="padding:.6rem 1.1rem;background:#e8ebf0;border-radius:6px;cursor:pointer">
+    Elemento con role=button
+  </div>
+  <span id="fake-clicked" data-testid="fake-clicked"></span>
+</div>
+
+<div class="row">
+  <button id="disabled-button" type="button" disabled>Bottone disabilitato</button>
+  <input id="disabled-input" type="text" value="non modificabile" disabled>
+</div>
+
+<form method="post" action="/elements/upload" enctype="multipart/form-data">
+  <label for="upload">Carica un file</label>
+  <input id="upload" name="file" type="file">
+  <button type="submit">Invia file</button>
+</form>
+
+<p><a class="btn" id="download-link" href="/elements/download" download>Scarica file</a></p>
+
+<h2>Iframe same-origin</h2>
+<iframe id="inner" title="Contenuto interno" src="/elements/frame"></iframe>`
+      )
+    )
+  );
+
+  app.get("/elements/frame", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Frame - test-web",
+        `<h1>Dentro l'iframe</h1>
+<label for="frame-input">Campo nel frame</label>
+<input id="frame-input" name="frameField" type="text" placeholder="Testo nel frame">
+<button id="frame-button" type="button"
+        onclick="document.getElementById('frame-result').textContent='frame-clicked'">
+  Bottone nel frame
+</button>
+<p id="frame-result" data-testid="frame-result"></p>`
+      )
+    )
+  );
+
+  app.get("/elements/popup", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Nuova tab - test-web",
+        `<h1>Nuova tab</h1>
+<p data-testid="popup-message">Questa pagina è stata aperta in una nuova tab.</p>
+<label for="popup-input">Campo nella nuova tab</label>
+<input id="popup-input" name="popupField" type="text">`
+      )
+    )
+  );
+
+  app.get("/elements/download", async (_request, reply) =>
+    reply
+      .header("content-disposition", 'attachment; filename="sample.txt"')
+      .type("text/plain")
+      .send("contenuto-file-di-test\n")
+  );
+
+  app.post("/elements/upload", async (request, reply) => {
+    const file = await request.file();
+    if (!file) {
+      return reply.code(400).type("text/html").send(page("Upload", "<h1>Nessun file</h1>"));
+    }
+    const buffer = await file.toBuffer();
+    getState().uploads.push({
+      filename: file.filename,
+      size: buffer.length,
+      content: buffer.toString("utf8").slice(0, 500)
+    });
+    return reply.type("text/html").send(
+      page(
+        "Upload completato - test-web",
+        `<h1>File ricevuto</h1>
+<p data-testid="upload-filename">${escapeHtml(file.filename)}</p>
+<p data-testid="upload-size">${buffer.length}</p>`
+      )
+    );
+  });
+
+  // ---- 17.5 controlled errors --------------------------------------------
+
+  app.get("/errors", async (_request, reply) => {
+    const config = getState().config;
+
+    const confirmButton = config.missingElement
+      ? `<p data-testid="confirm-missing">Il pulsante Conferma non è disponibile.</p>`
+      : `<button id="confirm-button" type="button"
+             onclick="document.getElementById('confirm-result').textContent='confermato'">
+      Conferma
+    </button>
+    <span id="confirm-result" data-testid="confirm-result"></span>`;
+
+    return reply.type("text/html").send(
+      page(
+        "Errori - test-web",
+        `
+<h1>Errori controllati</h1>
+
+<h2>Pulsante ritardato</h2>
+<div id="delayed-container">
+  <p data-testid="delayed-pending">In attesa...</p>
+</div>
+
+<h2>Pulsante che può mancare</h2>
+${confirmButton}
+
+<h2>Endpoint che può fallire</h2>
+<button id="call-api" type="button" onclick="callApi()">Chiama API</button>
+<p id="api-result" data-testid="api-result"></p>
+
+<h2>Errore JavaScript</h2>
+<button id="js-error" type="button" onclick="window.__missingFunction()">Genera errore JS</button>
+
+<script>
+  setTimeout(function () {
+    var container = document.getElementById("delayed-container");
+    container.innerHTML =
+      '<button id="delayed-button" type="button" ' +
+      'onclick="document.getElementById(\\'delayed-result\\').textContent=\\'ok\\'">' +
+      'Pulsante ritardato</button>' +
+      '<span id="delayed-result" data-testid="delayed-result"></span>';
+  }, ${config.delayedButtonMs});
+
+  function callApi() {
+    fetch("/api/flaky")
+      .then(function (r) {
+        document.getElementById("api-result").textContent = "status:" + r.status;
+      })
+      .catch(function (e) {
+        document.getElementById("api-result").textContent = "error:" + e.message;
+      });
+  }
+</script>`
+      )
+    );
+  });
+
+  app.get("/api/flaky", async (_request, reply) => {
+    if (getState().config.failApi) {
+      return reply.code(500).send({ error: "Errore interno simulato" });
+    }
+    return { ok: true };
+  });
+
+  app.get("/", async (_request, reply) => reply.redirect("/login"));
+
+  return app;
+}

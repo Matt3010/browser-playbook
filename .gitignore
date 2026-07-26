@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.next/
+.env
+.env.local
+.verify-logs/
+e2e/test-results/
+e2e/playwright-report/
+*.log
+.DS_Store
+*.tsbuildinfo

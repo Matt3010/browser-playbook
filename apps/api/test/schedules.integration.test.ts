@@ -1,0 +1,191 @@
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  createTestContext,
+  destroyTestContext,
+  resetDatabase,
+  registerUser,
+  createWorkflow,
+  gotoStep,
+  clickStep,
+  type TestContext,
+  type AuthedUser
+} from "./helpers";
+
+let ctx: TestContext;
+let user: AuthedUser;
+
+beforeAll(async () => {
+  ctx = await createTestContext();
+});
+afterAll(async () => {
+  await destroyTestContext(ctx);
+});
+beforeEach(async () => {
+  await resetDatabase(ctx.prisma);
+  user = await registerUser(ctx.app, "owner@example.com");
+});
+
+async function readyWorkflow() {
+  const workflow = await createWorkflow(ctx.app, user.cookie, "Scheduled flow");
+  await ctx.app.inject({
+    method: "PUT",
+    url: `/api/workflows/${workflow.id}/steps`,
+    headers: { cookie: user.cookie },
+    payload: { steps: [gotoStep("http://test-web:3001/login"), clickStep("Login")] }
+  });
+  return workflow;
+}
+
+function inFuture(ms: number): string {
+  return new Date(Date.now() + ms).toISOString();
+}
+
+async function schedule(workflowId: string, runAt: string, timezone = "Europe/Rome") {
+  return ctx.app.inject({
+    method: "POST",
+    url: `/api/workflows/${workflowId}/schedules`,
+    headers: { cookie: user.cookie },
+    payload: { runAt, timezone }
+  });
+}
+
+describe("single future schedule", () => {
+  it("creates the schedule, the queued execution and a delayed persistent job", async () => {
+    const workflow = await readyWorkflow();
+    const runAt = inFuture(60_000);
+    const response = await schedule(workflow.id, runAt);
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json<{
+      id: string;
+      status: string;
+      queueJobId: string;
+      timezone: string;
+      executionId: string;
+    }>();
+    expect(body.status).toBe("scheduled");
+    expect(body.timezone).toBe("Europe/Rome");
+    expect(body.queueJobId).toBe(body.executionId);
+
+    const execution = await ctx.prisma.execution.findUnique({ where: { id: body.executionId } });
+    expect(execution!.status).toBe("queued");
+    expect(execution!.scheduleId).toBe(body.id);
+
+    // The job lives in Redis with a delay, so it survives a restart.
+    expect(await ctx.queue.getJobState(body.queueJobId)).toBe("delayed");
+  });
+
+  it("stores runAt and timezone as given", async () => {
+    const workflow = await readyWorkflow();
+    const runAt = inFuture(120_000);
+    const body = (await schedule(workflow.id, runAt, "UTC")).json();
+    const stored = await ctx.prisma.schedule.findUnique({ where: { id: body.id } });
+    expect(stored!.runAt.toISOString()).toBe(new Date(runAt).toISOString());
+    expect(stored!.timezone).toBe("UTC");
+  });
+
+  it("rejects a past instant", async () => {
+    const workflow = await readyWorkflow();
+    const response = await schedule(workflow.id, new Date(Date.now() - 60_000).toISOString());
+    expect(response.statusCode).toBe(400);
+    expect(await ctx.prisma.schedule.count()).toBe(0);
+    expect(await ctx.prisma.execution.count()).toBe(0);
+  });
+
+  it("rejects an invalid timezone", async () => {
+    const workflow = await readyWorkflow();
+    const response = await schedule(workflow.id, inFuture(60_000), "Mars/Olympus");
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("rejects a workflow with no enabled steps", async () => {
+    const workflow = await createWorkflow(ctx.app, user.cookie, "Empty");
+    const response = await schedule(workflow.id, inFuture(60_000));
+    expect(response.statusCode).toBe(409);
+  });
+
+  it("does not let a user schedule another user's workflow", async () => {
+    const workflow = await readyWorkflow();
+    const other = await registerUser(ctx.app, "other@example.com");
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/schedules`,
+      headers: { cookie: other.cookie },
+      payload: { runAt: inFuture(60_000), timezone: "UTC" }
+    });
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("lists the schedules of a workflow", async () => {
+    const workflow = await readyWorkflow();
+    await schedule(workflow.id, inFuture(60_000));
+    const response = await ctx.app.inject({
+      method: "GET",
+      url: `/api/workflows/${workflow.id}/schedules`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.json()).toHaveLength(1);
+  });
+
+  it("exposes the live queue state of a schedule", async () => {
+    const workflow = await readyWorkflow();
+    const created = (await schedule(workflow.id, inFuture(60_000))).json();
+    const response = await ctx.app.inject({
+      method: "GET",
+      url: `/api/schedules/${created.id}`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.json().jobState).toBe("delayed");
+  });
+});
+
+describe("schedule cancellation", () => {
+  it("cancels a pending schedule, removes the job and cancels the execution", async () => {
+    const workflow = await readyWorkflow();
+    const created = (await schedule(workflow.id, inFuture(60_000))).json();
+
+    const response = await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/schedules/${created.id}`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().status).toBe("cancelled");
+
+    expect(await ctx.queue.getJobState(created.queueJobId)).toBeNull();
+    const execution = await ctx.prisma.execution.findUnique({
+      where: { id: created.executionId }
+    });
+    expect(execution!.status).toBe("cancelled");
+    expect(execution!.finishedAt).not.toBeNull();
+  });
+
+  it("refuses to cancel twice", async () => {
+    const workflow = await readyWorkflow();
+    const created = (await schedule(workflow.id, inFuture(60_000))).json();
+    await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/schedules/${created.id}`,
+      headers: { cookie: user.cookie }
+    });
+    const second = await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/schedules/${created.id}`,
+      headers: { cookie: user.cookie }
+    });
+    expect(second.statusCode).toBe(409);
+  });
+
+  it("does not let another user cancel a schedule", async () => {
+    const workflow = await readyWorkflow();
+    const created = (await schedule(workflow.id, inFuture(60_000))).json();
+    const other = await registerUser(ctx.app, "other@example.com");
+    const response = await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/schedules/${created.id}`,
+      headers: { cookie: other.cookie }
+    });
+    expect(response.statusCode).toBe(404);
+    expect(await ctx.queue.getJobState(created.queueJobId)).toBe("delayed");
+  });
+});

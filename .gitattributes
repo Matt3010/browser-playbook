@@ -1,0 +1,10 @@
+# Normalise text files in the repository to LF.
+* text=auto eol=lf
+
+# These must keep LF even when checked out on Windows: they are executed inside
+# Linux containers, where CRLF breaks the shebang and shell parsing.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Makefile text eol=lf
