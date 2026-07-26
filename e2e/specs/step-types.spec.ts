@@ -540,6 +540,77 @@ test.describe("step execution", () => {
     expect(JSON.stringify(execution)).not.toContain("segreto-non-loggato");
   });
 
+  test("refuses to act on a tab that only shares the number it was recorded with", async () => {
+    // Page ids are handed out in the order tabs appear, so tab-1 means "the first tab
+    // that opened". When the site opens one the recording never saw, tab-1 names a
+    // different document — and it is found, so the action lands there and the run
+    // reports success. The same panel is served on both origins the stack answers
+    // on, so the recorded selector resolves in the intruder too: nothing about the
+    // failure is visible from the selector's point of view.
+    const workflow = await client.createWorkflow(
+      `Tab intrusa ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/tabs/intruder`
+    );
+
+    await client.putSteps(workflow.id, [
+      step({
+        type: "goto",
+        name: "Vai al pannello ordini",
+        value: `${TEST_WEB_INTERNAL_URL}/tabs/intruder`
+      }),
+      step({
+        type: "click",
+        name: "Apri il pannello",
+        selector: sel("css", "#open-panel")
+      }),
+      step({ type: "switchPage", name: "Passa al pannello", value: "tab-1" }),
+      step({
+        type: "click",
+        name: "Conferma dal pannello",
+        pageId: "tab-1",
+        // Recorded on the real panel, which is the origin the run must act on.
+        pageOrigin: TEST_WEB_INTERNAL_URL,
+        selector: { ...sel("css", "#panel-action"), pageId: "tab-1" }
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+
+    expect(execution.status, "acting on the wrong document must stop the run").toBe("failed");
+    expect(execution.errorMessage ?? "").toMatch(/shop-web|origin/i);
+
+    // And above all: the intruder must not have been touched.
+    const state = await getTestWebState();
+    expect(state.panelClicks, "no panel may have been confirmed").toEqual([]);
+  });
+
+  test("still acts on a tab whose origin is the recorded one", async () => {
+    // The check must not stand in the way of the ordinary case: one tab, same origin.
+    const workflow = await client.createWorkflow(
+      `Tab regolare ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` }),
+      step({ type: "click", name: "Apri nuova tab", selector: sel("css", "#new-tab-link") }),
+      step({ type: "switchPage", name: "Passa alla nuova tab", value: "tab-1" }),
+      step({
+        type: "fill",
+        name: "Scrivi nella nuova tab",
+        pageId: "tab-1",
+        pageOrigin: TEST_WEB_INTERNAL_URL,
+        value: "va bene",
+        selector: { ...sel("css", "#popup-input"), pageId: "tab-1" }
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    const execution = await client.waitForExecution(started.id);
+    expect(execution.status, `execution failed: ${execution.errorMessage ?? ""}`).toBe("completed");
+  });
+
   test("skips disabled steps", async () => {
     const workflow = await client.createWorkflow(
       `Step disabilitati ${Date.now()}`,

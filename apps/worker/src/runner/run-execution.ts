@@ -49,6 +49,7 @@ function rowToStep(row: {
   type: string;
   name: string;
   pageId: string;
+  pageOrigin: string | null;
   selectorJson: unknown;
   valueTemplate: string | null;
   timeoutMs: number;
@@ -60,6 +61,7 @@ function rowToStep(row: {
     type: row.type,
     name: row.name,
     pageId: row.pageId,
+    pageOrigin: row.pageOrigin,
     selector: row.selectorJson ?? null,
     value: row.valueTemplate,
     timeoutMs: row.timeoutMs,

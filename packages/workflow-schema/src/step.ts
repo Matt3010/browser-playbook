@@ -53,6 +53,17 @@ export const StepSchema = z
     type: z.enum(STEP_TYPES),
     name: z.string().min(1).max(200),
     pageId: z.string().min(1).default("main"),
+    /**
+     * Origin of the document this step was recorded against.
+     *
+     * Page ids are handed out in the order tabs appear, so `tab-1` means "the first
+     * tab that opened" rather than a particular document: a tab the recording never
+     * saw shifts the numbering and the id then names something else. Carrying the
+     * origin lets the runner tell the two apart instead of acting on whatever bears
+     * the number. Null on steps recorded before this existed, and on `main`, whose
+     * identity is never in question.
+     */
+    pageOrigin: z.string().nullish(),
     selector: SelectorSchema.nullish(),
     value: z.string().nullish(),
     timeoutMs: z.number().int().min(100).max(120000).default(10000),

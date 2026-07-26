@@ -474,3 +474,37 @@ describe("step names", () => {
     expect(result!.step.name).toBe("Inserisci Email");
   });
 });
+
+describe("the origin a step was recorded against", () => {
+  // A page id says "the first tab that opened", not which document that was, so the
+  // origin travels with the step. Anything that identifies nothing must stay null:
+  // a check that always passes is worse than no check, because it looks like one.
+  it("carries the origin of the page the action happened on", () => {
+    const result = actionToStep(
+      action({
+        kind: "click",
+        pageId: "tab-1",
+        pageUrl: "https://shop.example.com/carrello?id=7",
+        element: { tag: "button", role: "button", accessibleName: "Paga", unique: { role: true } }
+      }),
+      { newId }
+    );
+    expect(result!.step.pageOrigin).toBe("https://shop.example.com");
+  });
+
+  it("stays null for a tab captured before it has loaded", () => {
+    const result = actionToStep(
+      action({ kind: "newTab", value: "tab-1", pageId: "tab-1", pageUrl: "about:blank" }),
+      { newId }
+    );
+    expect(result!.step.pageOrigin).toBeNull();
+  });
+
+  it("stays null when there is no url at all", () => {
+    const result = actionToStep(
+      action({ kind: "navigate", url: "https://example.com/login" }),
+      { newId }
+    );
+    expect(result!.step.pageOrigin).toBeNull();
+  });
+});

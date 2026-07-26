@@ -189,6 +189,21 @@ function slugify(value: string): string {
  * prefix ignored: neither is part of the site's identity, and including them
  * would create a second credential for the same login.
  */
+/**
+ * Origin of the page an action was recorded on, when it is one that identifies a
+ * document. A tab captured the instant it opens is still `about:blank`, which
+ * identifies nothing, so it yields null and no check is made for that step.
+ */
+export function originOfRecordedPage(pageUrl: string | null | undefined): string | null {
+  if (!pageUrl) return null;
+  try {
+    const origin = new URL(pageUrl).origin;
+    return origin && origin !== "null" ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
 export function siteSlugFromUrl(pageUrl: string | null | undefined): string | null {
   if (!pageUrl) return null;
   let host: string;
@@ -313,6 +328,10 @@ export function actionToStep(
       ? `${stepName(action, selector)} (azione finale)`
       : stepName(action, selector),
     pageId: action.pageId,
+    // Which document this was recorded against, so the runner can tell a tab from
+    // another one that merely inherited its number. about:blank and anything
+    // unparseable carry no identity and are left out.
+    pageOrigin: originOfRecordedPage(action.pageUrl),
     selector,
     value,
     timeoutMs,

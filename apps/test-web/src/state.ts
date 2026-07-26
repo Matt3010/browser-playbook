@@ -27,6 +27,12 @@ export interface TestState {
   /** Destructive side effect: an order must never be placed while recording. */
   orders: Array<{ note: string; placedAt: string }>;
   loginAttempts: number;
+  /**
+   * Which document a "panel" action actually landed in, by origin. The same page is
+   * reachable on two origins, so this is how a test can tell that the runner acted
+   * on the tab it meant to rather than on one that merely shares its number.
+   */
+  panelClicks: Array<{ origin: string; at: string }>;
   /** Partial wizard data between step 1 and step 2, keyed by session id. */
   wizardDrafts: Record<string, { name: string; email: string }>;
 }
@@ -46,6 +52,7 @@ function freshState(): TestState {
     uploads: [],
     orders: [],
     loginAttempts: 0,
+    panelClicks: [],
     wizardDrafts: {}
   };
 }

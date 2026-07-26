@@ -45,18 +45,45 @@ function renderValue(step: Step, ctx: StepExecutionContext): string {
  * action against the wrong document — clicking the wrong button, typing into the
  * wrong form — and report success.
  */
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
+}
+
 function pageFor(step: Step, ctx: StepExecutionContext): Page {
   const page = ctx.session.getPage(step.pageId);
-  if (page) return page;
+  if (!page) {
+    const open = ctx.session
+      .listPages()
+      .map((p) => p.pageId)
+      .join(", ");
+    throw new StepExecutionError(
+      `Step '${step.name}' targets page '${step.pageId}', which is not open ` +
+        `(open pages: ${open || "none"}). The workflow stops instead of acting on another page.`
+    );
+  }
 
-  const open = ctx.session
-    .listPages()
-    .map((p) => p.pageId)
-    .join(", ");
-  throw new StepExecutionError(
-    `Step '${step.name}' targets page '${step.pageId}', which is not open ` +
-      `(open pages: ${open || "none"}). The workflow stops instead of acting on another page.`
-  );
+  // Finding a page under that id is not the same as finding the right page. Ids are
+  // handed out in the order tabs appear, so a tab the recording never saw shifts the
+  // numbering and `tab-1` comes to mean a different document — which accepts the
+  // action in silence. `main` is exempt: it is the initial page, and its own origin
+  // legitimately changes as the workflow navigates.
+  if (step.pageOrigin && step.pageId !== "main") {
+    const actual = originOf(page.url());
+    if (actual && actual !== step.pageOrigin) {
+      throw new StepExecutionError(
+        `Step '${step.name}' targets page '${step.pageId}', which was recorded on ` +
+          `${step.pageOrigin} but is now showing ${actual}. A tab the recording did not ` +
+          `see has taken that number, so the workflow stops instead of acting on the ` +
+          `wrong document.`
+      );
+    }
+  }
+
+  return page;
 }
 
 /** The runner's wrapper around the shared pointer delivery: it names the step in

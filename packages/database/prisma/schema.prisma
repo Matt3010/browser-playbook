@@ -56,6 +56,10 @@ model WorkflowStep {
   type          String
   name          String
   pageId        String   @default("main")
+  /// Origin of the document the step was recorded against. Page ids follow the order
+  /// tabs appear in, so the id alone cannot tell one tab from another that merely
+  /// took its number.
+  pageOrigin    String?
   selectorJson  Json
   valueTemplate String?
   timeoutMs     Int      @default(10000)

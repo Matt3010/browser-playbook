@@ -273,6 +273,8 @@ export interface TestWebState {
   uploads: Array<{ filename: string; size: number; content: string }>;
   orders: Array<{ note: string; placedAt: string }>;
   loginAttempts: number;
+  /** Which origin a panel action landed in, so a test can tell the tabs apart. */
+  panelClicks: Array<{ origin: string; at: string }>;
 }
 
 export async function resetTestWeb(): Promise<void> {

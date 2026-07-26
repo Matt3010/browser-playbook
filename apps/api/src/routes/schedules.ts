@@ -55,6 +55,7 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
         type: row.type,
         name: row.name,
         pageId: row.pageId,
+        pageOrigin: row.pageOrigin,
         selector: row.selectorJson ?? null,
         value: row.valueTemplate,
         timeoutMs: row.timeoutMs,

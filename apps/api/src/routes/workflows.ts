@@ -28,6 +28,7 @@ function rowToStep(row: {
   type: string;
   name: string;
   pageId: string;
+  pageOrigin: string | null;
   selectorJson: unknown;
   valueTemplate: string | null;
   timeoutMs: number;
@@ -39,6 +40,7 @@ function rowToStep(row: {
     type: row.type,
     name: row.name,
     pageId: row.pageId,
+    pageOrigin: row.pageOrigin,
     selector: row.selectorJson ?? null,
     value: row.valueTemplate,
     timeoutMs: row.timeoutMs,
@@ -194,6 +196,7 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
           type: step.type,
           name: step.name,
           pageId: step.pageId,
+          pageOrigin: step.pageOrigin ?? null,
           selectorJson: (step.selector ?? null) as never,
           valueTemplate: step.value ?? null,
           timeoutMs: step.timeoutMs,

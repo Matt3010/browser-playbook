@@ -146,6 +146,17 @@ These are the classes of defect this codebase actually produced, so look here fi
   traps it must avoid: an unfinished execution has `finishedAt: null` and must never
   be read as infinitely old, and the artifact path stored on a row is data — pruning
   stays inside the artifact root.
+- **An id that encodes order is not an identity.** Page ids are handed out as tabs
+  appear, so `tab-1` means "the first tab that opened". A tab the recording never saw
+  — an ad, an interstitial — shifts the numbering, `tab-1` then names a different
+  document, `pageFor` finds it, and the action lands there and reports `completed`.
+  Proven with a fixture serving the same page on two origins so the selector resolves
+  in both. Steps now carry `pageOrigin` and the runner compares it. Three deliberate
+  limits: `main` is exempt because its origin legitimately changes as the workflow
+  navigates; `about:blank` yields null so no check is made, because a check that
+  always passes is worse than none; unreferenced extra tabs are ignored so a late
+  popup does not abort a good run. A blank `window.open()` popup is still
+  indistinguishable — the check covers the realistic case, not every case.
 - **A shared image drags its healthcheck along.** `migrate` was given the api image
   to avoid a second build, and inherited a healthcheck probing port 4000, which
   nothing serves there. It exits 0 but never turns healthy, so every service

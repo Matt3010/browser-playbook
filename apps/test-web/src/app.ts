@@ -73,7 +73,8 @@ export async function buildTestWeb(): Promise<FastifyInstance> {
       wizardSubmissions: state.wizardSubmissions,
       uploads: state.uploads,
       orders: state.orders,
-      loginAttempts: state.loginAttempts
+      loginAttempts: state.loginAttempts,
+      panelClicks: state.panelClicks
     };
   });
 
@@ -450,6 +451,60 @@ ${summary}`
 <p data-testid="popup-message">Questa pagina è stata aperta in una nuova tab.</p>
 <label for="popup-input">Campo nella nuova tab</label>
 <input id="popup-input" name="popupField" type="text">`
+      )
+    )
+  );
+
+  app.post("/api/test/panel-click", async (request) => {
+    const body = (request.body ?? {}) as { origin?: unknown };
+    getState().panelClicks.push({
+      origin: typeof body.origin === "string" ? body.origin : "unknown",
+      at: new Date().toISOString()
+    });
+    return { ok: true };
+  });
+
+  /*
+    Page ids are handed out in the order tabs appear, so `tab-1` means "the first tab
+    that opened", not "that tab". This page opens an unexpected tab before the one the
+    workflow cares about — an ad, an interstitial, a session warning: something real
+    sites do and recording sessions often miss. The intruder is the very same panel
+    served on the other origin the stack answers on, so a selector recorded for the
+    real panel resolves there too and the wrong document accepts the action in
+    silence.
+  */
+  app.get("/tabs/intruder", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Tab inattesa - test-web",
+        `<h1>Pannello ordini</h1>
+<p>Questa pagina apre una tab inattesa prima di quella che serve.</p>
+<button id="open-panel" onclick="window.open('/tabs/panel', '_blank')">Apri il pannello</button>
+<script>
+  // Fires before anything the workflow does, so it takes tab-1.
+  window.open("http://shop-web:3001/tabs/panel", "_blank");
+</script>`
+      )
+    )
+  );
+
+  app.get("/tabs/panel", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Pannello - test-web",
+        `<h1>Pannello</h1>
+<p data-testid="panel-origin"></p>
+<button id="panel-action" onclick="confirmPanel()">Conferma dal pannello</button>
+<script>
+  document.querySelector('[data-testid="panel-origin"]').textContent = location.origin;
+  function confirmPanel() {
+    fetch("/api/test/panel-click", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ origin: location.origin })
+    });
+  }
+</script>`
       )
     )
   );
