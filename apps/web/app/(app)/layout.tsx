@@ -1,16 +1,17 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
+import { Bell, KeyRound, LayoutDashboard, Play, Workflow } from "lucide-react";
 import { api, ApiError, type NotificationEntry } from "@/lib/api";
+import { Sidebar, useRememberedCollapse, type SidebarLink } from "@/components/Sidebar";
 
-const NAV = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/workflows", label: "Workflow" },
-  { href: "/credentials", label: "Variabili e credenziali" },
-  { href: "/executions", label: "Esecuzioni" },
-  { href: "/notifications", label: "Notifiche" }
+const NAV: SidebarLink[] = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
+  { href: "/workflows", label: "Workflow", icon: Workflow },
+  { href: "/credentials", label: "Variabili e credenziali", icon: KeyRound },
+  { href: "/executions", label: "Esecuzioni", icon: Play },
+  { href: "/notifications", label: "Notifiche", icon: Bell }
 ];
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -19,6 +20,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [email, setEmail] = useState<string | null>(null);
   const [unread, setUnread] = useState(0);
   const [checked, setChecked] = useState(false);
+  const [collapsed, toggleSidebar] = useRememberedCollapse();
 
   useEffect(() => {
     let cancelled = false;
@@ -73,44 +75,23 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     );
   }
 
+  // The badge belongs to the notifications entry, and nowhere else knows the count.
+  const links = NAV.map((link) =>
+    link.href === "/notifications" && unread > 0 ? { ...link, badge: unread } : link
+  );
+
   return (
-    <div className="min-h-screen">
-      <header className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
-          <span className="font-semibold">Browser Automation</span>
-          <nav className="flex flex-1 items-center gap-4 text-sm">
-            {NAV.map((item) => (
-              <Link
-                key={item.href}
-                href={item.href}
-                data-testid={`nav-${item.href.slice(1)}`}
-                className={
-                  pathname.startsWith(item.href)
-                    ? "font-medium text-blue-700"
-                    : "text-slate-600 hover:text-slate-900"
-                }
-              >
-                {item.label}
-                {item.href === "/notifications" && unread > 0 ? (
-                  <span
-                    className="badge ml-1 bg-red-100 text-red-700"
-                    data-testid="unread-badge"
-                  >
-                    {unread}
-                  </span>
-                ) : null}
-              </Link>
-            ))}
-          </nav>
-          <span className="text-sm text-slate-500" data-testid="current-user">
-            {email}
-          </span>
-          <button className="btn-secondary" onClick={logout} data-testid="logout">
-            Logout
-          </button>
-        </div>
-      </header>
-      <main className="mx-auto max-w-6xl p-4">{children}</main>
+    <div className="flex min-h-screen">
+      <Sidebar
+        links={links}
+        activeHref={pathname}
+        collapsed={collapsed}
+        onToggle={toggleSidebar}
+        user={email}
+        onLogout={logout}
+        title="Browser Automation"
+      />
+      <main className="min-w-0 flex-1 p-4">{children}</main>
     </div>
   );
 }

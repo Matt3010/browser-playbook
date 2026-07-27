@@ -98,7 +98,17 @@ test.describe("usable on an iPad", () => {
     }
   });
 
-  test("every section stays reachable from the header", async ({ page }) => {
+  test("starts with the sidebar folded, and the content has the width", async ({ page }) => {
+    // A sidebar is a quarter of an iPad's width in portrait, and the page it
+    // takes it from is the one showing a remote screen.
+    await page.goto(`/workflows/${workflowId}`);
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "true");
+    await expect
+      .poll(async () => (await page.getByTestId("sidebar").boundingBox())!.width)
+      .toBeLessThan(96);
+  });
+
+  test("every section stays reachable from the navigation", async ({ page }) => {
     await page.goto("/dashboard");
     for (const id of [
       "nav-dashboard",

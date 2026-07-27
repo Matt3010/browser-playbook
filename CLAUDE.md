@@ -271,6 +271,12 @@ These are the classes of defect this codebase actually produced, so look here fi
   attempt against the real site. The list shows what a reference holds, `(vuota)`
   when it holds nothing, dots for a secret; `hasValue` had to be fixed while doing
   it, because it read the length of the *ciphertext* and encrypting "" is not empty.
+- **A row of links takes width from the page that needs it.** The navigation is a
+  sidebar that folds to icons; the choice is remembered, and below 1024 px it
+  starts folded, because the page it takes width from is the one showing a remote
+  screen. A person's choice wins over the width — they made it on this screen.
+  The fold is animated, so a test asserting the folded width has to wait for it
+  rather than read it on the spot.
 - **A stop that does not wait is a workflow cut in half.** Docker sends SIGTERM
   and kills ten seconds later by default. The worker answers SIGTERM by letting
   the running job finish — but ten seconds is not a run, so a deploy during an
