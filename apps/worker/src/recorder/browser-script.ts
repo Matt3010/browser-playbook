@@ -75,6 +75,34 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     return el.getAttribute("role") || implicitRole(el);
   }
 
+  /**
+   * The text an accessibility tree would read from this element: what is hidden
+   * from it is not part of the name. The required marker of a form field —
+   * `<span aria-hidden="true">*</span>` inside the label — is drawn on screen but
+   * excluded from the accessible name, so reading `textContent` recorded a name
+   * that matches nothing on replay and left every run on the fallback selector.
+   *
+   * Only for names. Visible text stays `textContent`: `aria-hidden` hides an
+   * element from assistive technology, not from the eye, and `getByText` sees it.
+   */
+  function accessibleTextOf(el: Element): string {
+    let out = "";
+    const children = Array.prototype.slice.call(el.childNodes) as Node[];
+    for (const node of children) {
+      if (node.nodeType === 3) {
+        out += node.textContent || "";
+        continue;
+      }
+      if (node.nodeType !== 1) continue;
+      const child = node as Element;
+      if (child.getAttribute("aria-hidden") === "true") continue;
+      const tag = tagOf(child);
+      if (tag === "script" || tag === "style") continue;
+      out += " " + accessibleTextOf(child);
+    }
+    return out.replace(/\s+/g, " ").trim();
+  }
+
   function labelTextFor(el: Element): string | null {
     const id = el.getAttribute("id");
     if (id) {
@@ -82,16 +110,25 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
         ? (window as any).CSS.escape(id)
         : id.replace(/["\\]/g, "\\$&");
       const explicit = document.querySelector(`label[for="${escaped}"]`);
-      if (explicit && explicit.textContent) return explicit.textContent.trim();
+      if (explicit) {
+        const text = accessibleTextOf(explicit);
+        if (text) return text;
+      }
     }
     const wrapping = el.closest("label");
-    if (wrapping && wrapping.textContent) return wrapping.textContent.trim();
+    if (wrapping) {
+      const text = accessibleTextOf(wrapping);
+      if (text) return text;
+    }
     const ariaLabel = el.getAttribute("aria-label");
     if (ariaLabel) return ariaLabel.trim();
     const labelledBy = el.getAttribute("aria-labelledby");
     if (labelledBy) {
       const target = document.getElementById(labelledBy);
-      if (target && target.textContent) return target.textContent.trim();
+      if (target) {
+        const text = accessibleTextOf(target);
+        if (text) return text;
+      }
     }
     return null;
   }
@@ -102,7 +139,10 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     const labelledBy = el.getAttribute("aria-labelledby");
     if (labelledBy) {
       const target = document.getElementById(labelledBy);
-      if (target && target.textContent) return target.textContent.trim();
+      if (target) {
+        const text = accessibleTextOf(target);
+        if (text) return text;
+      }
     }
     const tag = tagOf(el);
     const type = (el.getAttribute("type") || "").toLowerCase();
@@ -111,8 +151,8 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
       if (value) return value.trim();
     }
     if (tag === "button" || tag === "a" || el.getAttribute("role") === "button") {
-      const text = (el.textContent || "").trim();
-      if (text) return text.replace(/\s+/g, " ");
+      const text = accessibleTextOf(el);
+      if (text) return text;
     }
     const label = labelTextFor(el);
     if (label) return label;

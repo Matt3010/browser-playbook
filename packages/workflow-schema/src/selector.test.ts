@@ -254,11 +254,34 @@ describe("isGeneratedId", () => {
       expect(isGeneratedId(id), id).toBe(false);
     }
   });
+
+  /**
+   * React's useId is a counter, and the id it produces is routinely suffixed by
+   * the component using it. GitHub's repository visibility radios are labelled
+   * `_r_16_--label`: recognising only the bare `_r_16_` form let that through as
+   * a fallback, and the counter shifts with anything that renders before it.
+   */
+  it("detects a generated id that carries a suffix", () => {
+    for (const id of ["_r_16_--label", "_r_e_-input", "_r_1a_--description", ":r0:-label"]) {
+      expect(isGeneratedId(id), id).toBe(true);
+    }
+  });
+
+  it("does not mistake an author-written id that merely contains an r", () => {
+    for (const id of ["user_r_name", "order_ref_2", "repository-name-input", "_private_note"]) {
+      expect(isGeneratedId(id), id).toBe(false);
+    }
+  });
 });
 
 describe("buildFallback", () => {
   it("prefers a name attribute selector", () => {
     expect(buildFallback({ tag: "INPUT", nameAttr: "email" })).toBe("input[name='email']");
+  });
+  it("skips a generated id and falls through to the css path", () => {
+    expect(buildFallback({ tag: "input", id: "_r_16_--label", cssPath: "form > label" })).toBe(
+      "form > label"
+    );
   });
   it("then id, then css, then xpath", () => {
     expect(buildFallback({ tag: "input", id: "email" })).toBe("#email");

@@ -3,6 +3,7 @@ import {
   AppClient,
   SHOP_WEB_INTERNAL_URL,
   TEST_WEB_INTERNAL_URL,
+  configureTestWeb,
   getTestWebState,
   resetTestWeb,
   step
@@ -211,6 +212,42 @@ test.describe("recorder action capture", () => {
         .filter((s) => s.selector)
         .map((s) => (s.selector as { strategy: string }).strategy);
       expect(strategies).toContain("role");
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
+  test("keeps the required marker out of the recorded name", async () => {
+    // The asterisk of a required field is drawn on screen and hidden from the
+    // accessibility tree. Reading the label's raw text put it in the recorded
+    // name, which then matched nothing: on GitHub's "Repository name*" the
+    // primary selector missed on every run and the step cost a full timeout
+    // before the fallback saved it.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, {
+        kind: "fill",
+        selector: "#required-field",
+        value: "CL-4471"
+      });
+
+      const recording = await client.getRecording(session.sessionId);
+      const index = recording.steps.findIndex((s) => s.value === "CL-4471");
+      expect(index, "the fill must be recorded").toBeGreaterThanOrEqual(0);
+
+      const selector = recording.steps[index].selector as { name?: string; value?: string };
+      expect(JSON.stringify(selector)).not.toContain("*");
+      expect(selector.name ?? selector.value).toBe("Codice cliente");
+
+      // And it must resolve as recorded: a name that only the fallback can find
+      // is a step that costs its whole timeout on every single run.
+      const check = (recording.verifications ?? [])[index] as {
+        status: string;
+        usedFallback?: boolean;
+      };
+      expect(check.status).toBe("ok");
+      expect(check.usedFallback, "the primary selector must resolve").toBe(false);
     } finally {
       await client.closeSession(session.sessionId).catch(() => undefined);
     }
@@ -435,6 +472,47 @@ test.describe("closing action captured without being performed", () => {
       const state = await getTestWebState();
       expect(state.orders, "the order must be placed when the workflow runs").toHaveLength(1);
       expect(state.orders[0].note).toBe("consegna al piano");
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
+  test("waits for the closing action to land before closing the browser", async () => {
+    // The last step has nothing after it to wait on: the runner recorded the URL
+    // and tore the browser down within half a second of the click, while the
+    // request that click had just sent was still in flight. For the one step
+    // whose entire purpose is to act on the site, that is the wrong moment to
+    // let go — and the execution then reports the page it left, not where it
+    // landed.
+    await configureTestWeb({ checkoutDelayMs: 3000 });
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/checkout`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.armFinal(session.sessionId, true);
+      await client.interact(session.sessionId, { kind: "click", selector: "#place-order" });
+      await expect
+        .poll(
+          async () => (await client.getRecording(session.sessionId)).steps.some((s) => s.isFinal),
+          { timeout: 30_000 }
+        )
+        .toBe(true);
+
+      const recording = await client.getRecording(session.sessionId);
+      const workflow = await client.createWorkflow(
+        `Azione finale lenta ${Date.now()}`,
+        `${TEST_WEB_INTERNAL_URL}/checkout`
+      );
+      await client.putSteps(workflow.id, recording.steps);
+
+      const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+      expect(
+        execution.status,
+        `execution failed: ${execution.errorMessage ?? ""}`
+      ).toBe("completed");
+      expect(execution.currentUrl, "the execution must report where it landed").toContain(
+        "/checkout/confirmed"
+      );
+      expect((await getTestWebState()).orders).toHaveLength(1);
     } finally {
       await client.closeSession(session.sessionId).catch(() => undefined);
     }

@@ -203,6 +203,33 @@ These are the classes of defect this codebase actually produced, so look here fi
   recording died with `{{credentials.x}} is not defined` — and on a real site
   those are failed logins that lock the account. Both go through `persistSteps`
   now. Splitting a write in two is fine; splitting it in two *places* is not.
+- **A generated id with a suffix is still generated.** `isGeneratedId` knew
+  `_r_e_` but not `_r_16_--label`, which is what React's `useId` looks like once
+  the component appends its own suffix — GitHub's repository visibility radios.
+  The bare form was rejected, the suffixed one sailed through as a *fallback*
+  selector, and the counter moves whenever anything renders before it: the
+  fallback then points at another control and the run clicks it. A rule that
+  recognises a pattern has to recognise it wherever it is embedded.
+- **The name the eye reads is not the name the machine matches.** A required
+  field is marked with an asterisk hidden from the accessibility tree
+  (`<span aria-hidden="true">*</span>` inside the label). The recorder read the
+  label's `textContent`, stored `Repository name*`, and Playwright — which
+  computes the accessible name properly — matched nothing: every run spent the
+  full step timeout on the primary selector before the fallback rescued it, on
+  every step of that shape. Names now come from `accessibleTextOf`, which skips
+  what the accessibility tree skips. Visible text deliberately does not:
+  `aria-hidden` hides an element from assistive technology, not from `getByText`.
+- **Nothing waits for the last step.** Every step but the last is followed by one
+  that waits for its own element, which absorbs whatever the previous step set in
+  motion. The last step has nothing after it: the runner read the URL and closed
+  the browser within half a second of the click. Playwright waits for a
+  *navigation* an action starts, so a classic form submit was safe — but a page
+  that posts with `fetch` and then routes itself, which is what a modern
+  application does, was being cut off mid-request. For a closing action that is
+  the whole point of the run. `settleAfterLastStep` waits for load and then for
+  the network to go quiet, bounded, swallowing everything: the steps have already
+  succeeded, and a page that never goes quiet must not fail a good run. It also
+  made `currentUrl` truthful — it used to report the page the run left.
 
 ### Things a test cannot pin down
 

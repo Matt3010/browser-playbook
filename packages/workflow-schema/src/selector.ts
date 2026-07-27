@@ -133,6 +133,11 @@ export function isGeneratedId(id: string): boolean {
   if (value.includes(":")) return true;
   // Wrapped in underscores with only short fragments inside, e.g. `_r_e_`.
   if (/^_[a-z0-9_]{0,10}_$/i.test(value)) return true;
+  // The same React counter with the suffix the component appends to it, e.g.
+  // `_r_16_--label`. Only the bare form used to be recognised, so the suffixed
+  // one survived as a fallback selector — and the counter moves whenever
+  // anything renders before it, which points the fallback at another element.
+  if (/^_r_[a-z0-9]{1,8}_/i.test(value)) return true;
   // Purely numeric, e.g. `1234`.
   if (/^\d+$/.test(value)) return true;
   // A short prefix followed by a counter, e.g. `mui-1234`, `el7`, `a1`.

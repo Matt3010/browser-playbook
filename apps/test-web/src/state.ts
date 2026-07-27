@@ -18,6 +18,11 @@ export interface TestConfig {
   failApi: boolean;
   /** When true the login form always reports wrong credentials. */
   rejectLogin: boolean;
+  /**
+   * Delay in ms before the checkout POST answers. A real destructive action is
+   * not instantaneous, and the runner must still be there when it lands.
+   */
+  checkoutDelayMs: number;
 }
 
 export interface TestState {
@@ -42,7 +47,8 @@ export const DEFAULT_CONFIG: TestConfig = {
   delayedButtonMs: 500,
   missingElement: false,
   failApi: false,
-  rejectLogin: false
+  rejectLogin: false,
+  checkoutDelayMs: 0
 };
 
 function freshState(): TestState {

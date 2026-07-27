@@ -22,6 +22,7 @@ import type { WorkerConfig } from "../config";
 import type { SessionManager } from "../session/manager";
 import type { BrowserSession } from "../session/session";
 import { executeStep, type StepExecutionContext } from "./execute-step";
+import { settleAfterLastStep } from "./settle";
 
 export interface RunExecutionInput {
   executionId: string;
@@ -300,6 +301,12 @@ export async function runExecution(
         data: { currentUrl: session.currentUrl }
       });
     }
+
+    // Nothing follows the last step to wait for what it started, and the browser
+    // is closed moments later. Give its effect the chance to land before the
+    // execution decides where it ended up.
+    const lastPage = session.getActivePage();
+    if (lastPage) await settleAfterLastStep(lastPage);
 
     const totalMs = Date.now() - startedAt;
     await writeLog("info", `Execution completed in ${totalMs} ms`);

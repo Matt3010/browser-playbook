@@ -44,7 +44,11 @@ export async function buildTestWeb(): Promise<FastifyInstance> {
     const body = (request.body ?? {}) as Record<string, unknown>;
     const patch: Partial<TestConfig> = {};
 
-    const numbers: Array<keyof TestConfig> = ["dashboardDelayMs", "delayedButtonMs"];
+    const numbers: Array<keyof TestConfig> = [
+      "dashboardDelayMs",
+      "delayedButtonMs",
+      "checkoutDelayMs"
+    ];
     for (const key of numbers) {
       if (key in body) {
         const value = Number(body[key]);
@@ -324,6 +328,17 @@ ${summary}`
 <div class="row">
   <button id="disabled-button" type="button" disabled>Bottone disabilitato</button>
   <input id="disabled-input" type="text" value="non modificabile" disabled>
+</div>
+
+<!--
+  A required field marked the way real applications mark one: an asterisk that is
+  drawn on screen but hidden from the accessibility tree. It is not part of the
+  accessible name, so a recorder that reads the label's raw text records a name
+  that matches nothing on replay.
+-->
+<div class="row">
+  <label for="required-field">Codice cliente <span aria-hidden="true">*</span></label>
+  <input id="required-field" name="clientCode" type="text">
 </div>
 
 <fieldset>
@@ -661,26 +676,50 @@ ${confirmButton}
 <p>Ordini registrati: <span id="order-count" data-testid="order-count">${
           getState().orders.length
         }</span></p>
-<form method="post" action="/checkout">
+<form id="checkout-form" method="post" action="/checkout">
   <label for="order-note">Note per il corriere</label>
   <input id="order-note" name="note" type="text">
   <button id="place-order" type="submit">Acquista ora</button>
-</form>`
+</form>
+<script>
+  // The order is sent by the page itself, the way a modern application does.
+  // A classic form submit is a navigation, and Playwright waits for it as part
+  // of the click; this is the case nothing waits for, so it is the case that
+  // tells whether the runner is still there when the action lands.
+  document.getElementById("checkout-form").addEventListener("submit", function (event) {
+    event.preventDefault();
+    fetch("/checkout", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ note: document.getElementById("order-note").value })
+    }).then(function () {
+      window.location.href = "/checkout/confirmed";
+    });
+  });
+</script>`
       )
     )
   );
 
-  app.post("/checkout", async (request, reply) => {
+  app.post("/checkout", async (request) => {
     const body = (request.body ?? {}) as { note?: string };
+    // Answering the order takes as long as the test says it does: a destructive
+    // action on a real site lands after the click, not with it.
+    const delay = getState().config.checkoutDelayMs;
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
     getState().orders.push({ note: body.note ?? "", placedAt: new Date().toISOString() });
-    return reply.type("text/html").send(
+    return { ok: true };
+  });
+
+  app.get("/checkout/confirmed", async (_request, reply) =>
+    reply.type("text/html").send(
       page(
         "Ordine effettuato - test-web",
         `<h1>Ordine effettuato</h1>
 <p data-testid="order-confirmed">Grazie, il tuo ordine e stato registrato.</p>`
       )
-    );
-  });
+    )
+  );
 
   /**
    * Navigates itself away as soon as it loads. Real sites do this (geo/locale
