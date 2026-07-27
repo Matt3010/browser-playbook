@@ -13,7 +13,9 @@ import {
   type TemplateContext
 } from "@app/shared";
 import {
+  describeEmptyReferences,
   describeMissingReferences,
+  findEmptyReferences,
   findMissingReferences,
   StepSchema,
   type Step
@@ -22,6 +24,7 @@ import type { WorkerConfig } from "../config";
 import type { SessionManager } from "../session/manager";
 import type { BrowserSession } from "../session/session";
 import { executeStep, type StepExecutionContext } from "./execute-step";
+import { watchQuiet } from "./quiet";
 import { settleAfterLastStep } from "./settle";
 
 export interface RunExecutionInput {
@@ -219,6 +222,24 @@ export async function runExecution(
     return { status: "failed", errorMessage: message };
   }
 
+  // A name exists as soon as a step mentions it, so existing is not the same as
+  // holding something. An empty secret typed into a login form is a failed
+  // attempt against the real site — refused here, nothing is touched at all.
+  const emptyNames = (values: Record<string, string>) =>
+    Object.keys(values).filter((key) => values[key].length === 0);
+  const empty = findEmptyReferences(steps, {
+    variables: emptyNames(templates.variables),
+    credentials: emptyNames(templates.credentials)
+  });
+  if (empty.length > 0) {
+    const message = `The workflow references values that are empty: ${describeEmptyReferences(empty)}`;
+    await writeLog("error", message);
+    await finish(prisma, input.executionId, "failed", { errorMessage: message });
+    await notifyFailure(notifications, input.userId, workflow.name, message, log);
+    if (input.scheduleId) await settleSchedule(prisma, input.scheduleId, "failed");
+    return { status: "failed", errorMessage: message };
+  }
+
   let session: BrowserSession | null = null;
   const startedAt = Date.now();
 
@@ -307,22 +328,15 @@ export async function runExecution(
     // execution decides where it ended up, then photograph it.
     const lastPage = session.getActivePage();
     if (lastPage) {
-      await settleAfterLastStep({
-        waitForLoadState: (state, waitOptions) => lastPage.waitForLoadState(state, waitOptions),
-        // Address, document size and text: enough to notice a routing, a
-        // re-render or a label going from "in progress" to done, and cheap
-        // enough to ask for every quarter of a second. `textContent` rather
-        // than `innerText` on purpose — it costs no layout.
-        fingerprint: () =>
-          lastPage
-            .evaluate(
-              () =>
-                `${location.href}|${document.readyState}|` +
-                `${document.querySelectorAll("*").length}|` +
-                `${document.body ? document.body.textContent?.length ?? 0 : 0}`
-            )
-            .catch(() => null)
-      });
+      const watcher = await watchQuiet(lastPage);
+      try {
+        await settleAfterLastStep({
+          waitForLoadState: (state, waitOptions) => lastPage.waitForLoadState(state, waitOptions),
+          waitUntilQuiet: (quietMs) => watcher.waitUntilQuiet(quietMs)
+        });
+      } finally {
+        watcher.dispose();
+      }
       await captureResult({
         prisma,
         page: lastPage,

@@ -474,6 +474,10 @@ describe("references to values that do not exist", () => {
 
   it("refuses an immediate run instead of failing halfway through it", async () => {
     const workflow = await workflowUsing("{{credentials.password}}");
+    // Saving the steps creates the name, empty. This is the other case: the
+    // value existed and was deleted afterwards, which is what a run days later
+    // walks into.
+    await ctx.prisma.credential.deleteMany({ where: { name: "password" } });
 
     const response = await ctx.app.inject({
       method: "POST",
@@ -493,6 +497,7 @@ describe("references to values that do not exist", () => {
 
   it("refuses to schedule a run that could not succeed", async () => {
     const workflow = await workflowUsing("{{credentials.password}}");
+    await ctx.prisma.credential.deleteMany({ where: { name: "password" } });
 
     const response = await ctx.app.inject({
       method: "POST",
@@ -526,6 +531,71 @@ describe("references to values that do not exist", () => {
       headers: { cookie: user.cookie }
     });
     expect(response.statusCode).toBe(202);
+  });
+
+  it("creates every value the saved steps refer to, empty", async () => {
+    // A reference typed into the editor used to name nothing at all: the
+    // workflow saved happily and the run was refused later, with nowhere
+    // obvious to go and fill the value in.
+    await workflowUsing("{{variables.repoName}}");
+
+    const listed = await ctx.app.inject({
+      method: "GET",
+      url: "/api/credentials",
+      headers: { cookie: user.cookie }
+    });
+    const created = listed
+      .json()
+      .find((row: { name: string }) => row.name === "repoName");
+    expect(created, "the reference must have been created").toBeTruthy();
+    expect(created).toMatchObject({ kind: "variable", value: "", hasValue: false });
+  });
+
+  it("makes a secret out of a credentials reference and a variable out of a variables one", async () => {
+    await workflowUsing("{{credentials.apiToken}}");
+
+    const listed = await ctx.app.inject({
+      method: "GET",
+      url: "/api/credentials",
+      headers: { cookie: user.cookie }
+    });
+    const created = listed.json().find((row: { name: string }) => row.name === "apiToken");
+    expect(created).toMatchObject({ kind: "secret", value: null, hasValue: false });
+  });
+
+  it("refuses a run whose reference exists but holds nothing", async () => {
+    // Existing stopped being proof that there is anything to type. An empty
+    // secret sent to a login form is a failed attempt against the real site.
+    const workflow = await workflowUsing("{{credentials.password}}");
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/executions`,
+      headers: { cookie: user.cookie }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain("is empty");
+    expect(response.json().error).toContain("credentials.password");
+    expect(await ctx.prisma.execution.count()).toBe(0);
+  });
+
+  it("refuses to schedule a run whose reference holds nothing", async () => {
+    const workflow = await workflowUsing("{{credentials.password}}");
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/schedules`,
+      headers: { cookie: user.cookie },
+      payload: {
+        runAt: new Date(Date.now() + 60_000).toISOString(),
+        timezone: "Europe/Rome"
+      }
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error).toContain("is empty");
+    expect(await ctx.prisma.schedule.count()).toBe(0);
   });
 
   it("does not accept a variable in place of a credential", async () => {

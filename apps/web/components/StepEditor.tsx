@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Selector, Step, StepVerification } from "@/lib/api";
+import type { CredentialEntry, Selector, Step, StepVerification } from "@/lib/api";
 
 const STEP_TYPES = [
   "goto",
@@ -77,6 +77,35 @@ interface StepEditorProps {
   onChange: (steps: Step[]) => void;
   /** Aligned with `steps`: whether each one resolves on the live page. */
   verifications?: StepVerification[];
+  /** The variables and secrets the steps can reference, to show what they hold. */
+  values?: CredentialEntry[];
+}
+
+/** What a value shows when it holds nothing — including one not saved yet. */
+export const EMPTY_VALUE_LABEL = "(vuota)";
+/** A secret is never sent to the browser; this is what stands in for it. */
+export const SECRET_VALUE_LABEL = "••••••";
+
+/**
+ * A step's value as the list shows it: every reference replaced by what it
+ * actually holds. `{{variables.repoName}}` says nothing about whether the run
+ * will type "browser-playbook" or nothing at all, which is the only thing worth
+ * seeing at a glance. The reference itself is what the form edits, so it comes
+ * back the moment the field is focused.
+ */
+export function describeValue(
+  template: string | null | undefined,
+  values: CredentialEntry[]
+): string {
+  if (!template) return "";
+  return template.replace(/\{\{(variables|credentials)\.([a-zA-Z0-9_]+)\}\}/g, (_all, kind, name) => {
+    const wanted = kind === "credentials" ? "secret" : "variable";
+    const entry = values.find((v) => v.name === name && v.kind === wanted);
+    // Not saved yet: saving creates it empty, so it holds nothing either way.
+    if (!entry) return EMPTY_VALUE_LABEL;
+    if (!entry.hasValue) return EMPTY_VALUE_LABEL;
+    return entry.kind === "secret" ? SECRET_VALUE_LABEL : entry.value ?? SECRET_VALUE_LABEL;
+  });
 }
 
 const VERIFICATION_LABEL: Record<string, { text: string; className: string }> = {
@@ -86,8 +115,12 @@ const VERIFICATION_LABEL: Record<string, { text: string; className: string }> = 
   unchecked: { text: "non verificato", className: "bg-slate-100 text-slate-600" }
 };
 
-export function StepEditor({ steps, onChange, verifications = [] }: StepEditorProps) {
+export function StepEditor({ steps, onChange, verifications = [], values = [] }: StepEditorProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
+  // The value field shows what the reference holds until it is being edited, and
+  // the reference itself the moment it is: what you read is the outcome, what
+  // you type is the instruction.
+  const [editingValue, setEditingValue] = useState(false);
 
   // Resolved from the list rather than kept as a copy: the modal edits the step
   // in place, so it has to read what the list holds now.
@@ -236,9 +269,11 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
                   </div>
                   <p className="mt-0.5 truncate text-xs text-slate-500" title={describeSelector(step.selector)}>
                     {describeSelector(step.selector)}
-                    {step.value !== null && step.value !== undefined && step.value !== ""
-                      ? ` → ${step.value}`
-                      : ""}
+                    {step.value ? (
+                      <span data-testid={`step-value-${index}`} title={step.value}>
+                        {` → ${describeValue(step.value, values)}`}
+                      </span>
+                    ) : null}
                   </p>
                 </div>
 
@@ -274,7 +309,10 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
                   <div className="flex gap-1">
                     <button
                       className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
-                      onClick={() => setEditingId(step.id)}
+                      onClick={() => {
+                        setEditingValue(false);
+                        setEditingId(step.id);
+                      }}
                       data-testid={`step-edit-${index}`}
                     >
                       Modifica
@@ -380,7 +418,9 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
                   <span className="text-xs text-slate-600">Valore</span>
                   <input
                     className="input"
-                    value={editing.value ?? ""}
+                    value={editingValue ? editing.value ?? "" : describeValue(editing.value, values)}
+                    onFocus={() => setEditingValue(true)}
+                    onBlur={() => setEditingValue(false)}
                     onChange={(e) => update(editing.id, { value: e.target.value })}
                     placeholder="{{credentials.password}}"
                     data-testid={`step-value-input-${editingIndex}`}

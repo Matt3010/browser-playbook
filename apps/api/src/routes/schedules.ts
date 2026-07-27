@@ -1,28 +1,8 @@
 import type { FastifyInstance } from "fastify";
-import {
-  describeMissingReferences,
-  findMissingReferences,
-  isRunnableStepList,
-  StepSchema,
-  validateSchedule
-} from "@app/workflow-schema";
+import { isRunnableStepList, StepSchema, validateSchedule } from "@app/workflow-schema";
 import { requireAuth, currentUser } from "../auth";
 import { loadOwnedWorkflow, loadOwnedSchedule } from "../ownership";
-
-/**
- * Loads the names of the values a workflow can reference. Kept separate so both
- * the immediate-run and the scheduling route check the same thing.
- */
-async function availableValues(app: FastifyInstance, userId: string) {
-  const rows = await app.prisma.credential.findMany({
-    where: { userId },
-    select: { name: true, kind: true }
-  });
-  return {
-    variables: rows.filter((r) => r.kind === "variable").map((r) => r.name),
-    credentials: rows.filter((r) => r.kind === "secret").map((r) => r.name)
-  };
-}
+import { referenceState, unresolvedReferences } from "../references";
 
 export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireAuth);
@@ -69,12 +49,9 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
 
     // Nobody is watching a scheduled run, so a missing reference must be caught
     // now rather than at three in the morning.
-    const missing = findMissingReferences(steps, await availableValues(app, userId));
-    if (missing.length > 0) {
-      return reply.code(409).send({
-        error: `The workflow references values that do not exist: ${describeMissingReferences(missing)}`,
-        missingReferences: missing
-      });
+    const unresolved = unresolvedReferences(steps, await referenceState(app, userId));
+    if (unresolved) {
+      return reply.code(409).send(unresolved);
     }
 
     const { runAt, timezone } = request.body as { runAt: string; timezone: string };

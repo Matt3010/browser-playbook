@@ -26,19 +26,50 @@ export function findMissingReferences(steps: Step[], available: AvailableValues)
     variables: new Set(available.variables),
     credentials: new Set(available.credentials)
   };
-  const missing = new Map<string, MissingReference>();
+  return collectReferences(steps, (ref) => !known[ref.kind].has(ref.key));
+}
 
+/**
+ * Finds references to values that exist but hold nothing.
+ *
+ * A name is created as soon as a step mentions it, so that it shows up ready to
+ * be filled in — which means "it exists" stopped being proof that there is
+ * anything to type. An empty secret typed into a login form is a failed attempt
+ * against the real site, and enough of them lock the account, so it is refused
+ * exactly like a missing one.
+ */
+export function findEmptyReferences(steps: Step[], empty: AvailableValues): MissingReference[] {
+  return collectReferences(steps, (ref) =>
+    (ref.kind === "variables" ? empty.variables : empty.credentials).includes(ref.key)
+  );
+}
+
+function collectReferences(
+  steps: Step[],
+  matches: (ref: { kind: "variables" | "credentials"; key: string }) => boolean
+): MissingReference[] {
+  const found = new Map<string, MissingReference>();
   for (const step of steps) {
     if (!step.enabled || !step.value) continue;
     for (const ref of extractTemplateRefs(step.value)) {
-      if (known[ref.kind].has(ref.key)) continue;
+      if (!matches(ref)) continue;
       const id = `${ref.kind}.${ref.key}`;
-      const entry = missing.get(id) ?? { kind: ref.kind, name: ref.key, steps: [] };
+      const entry = found.get(id) ?? { kind: ref.kind, name: ref.key, steps: [] };
       if (!entry.steps.includes(step.name)) entry.steps.push(step.name);
-      missing.set(id, entry);
+      found.set(id, entry);
     }
   }
-  return [...missing.values()];
+  return [...found.values()];
+}
+
+/** Human readable summary of references that exist but hold nothing. */
+export function describeEmptyReferences(empty: MissingReference[]): string {
+  return empty
+    .map(
+      (m) =>
+        `{{${m.kind}.${m.name}}} is empty (used by ${m.steps.map((s) => `'${s}'`).join(", ")})`
+    )
+    .join("; ");
 }
 
 /** Human readable summary, suitable for an API error or an execution log. */

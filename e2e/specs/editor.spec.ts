@@ -110,6 +110,65 @@ test.describe("visual step editor", () => {
     await expect(page.getByTestId("workflow-name")).toHaveText(renamed);
   });
 
+  test("shows what a referenced value holds, not the reference", async ({ page }) => {
+    // `{{variables.repoName}}` says nothing about whether the run will type
+    // something or nothing at all, which is the only thing worth seeing at a
+    // glance. Saving the steps creates the name, so it exists and is empty.
+    const suffix = Date.now();
+    await client.putSteps(workflowId, [
+      step({
+        type: "goto",
+        name: "Vai al wizard",
+        value: `${TEST_WEB_INTERNAL_URL}/wizard/step-1`
+      }),
+      step({
+        type: "fill",
+        name: "Inserisci il nome",
+        value: `{{variables.nome${suffix}}}`,
+        selector: { strategy: "label", value: "Nome", fallback: null, pageId: "main", frame: null }
+      }),
+      step({
+        type: "fill",
+        name: "Inserisci la password",
+        value: `{{credentials.segreto${suffix}}}`,
+        selector: {
+          strategy: "label",
+          value: "Password",
+          fallback: null,
+          pageId: "main",
+          frame: null
+        }
+      })
+    ]);
+
+    await page.reload();
+    await expect(page.getByTestId("step-value-1")).toContainText("(vuota)");
+    await expect(page.getByTestId("step-value-2")).toContainText("(vuota)");
+
+    // Filled in, the variable shows its value and the secret stays hidden: the
+    // server never sends it to the browser.
+    await client.saveCredential(`nome${suffix}`, "Mario", "variable");
+    await client.saveCredential(`segreto${suffix}`, "TestPassword123!", "secret");
+
+    await page.reload();
+    await expect(page.getByTestId("step-value-1")).toContainText("Mario");
+    await expect(page.getByTestId("step-value-2")).toContainText("••••••");
+    await expect(page.getByTestId("step-value-2")).not.toContainText("TestPassword123!");
+    // The reference itself is still what the editor holds and would save.
+    await expect(page.getByTestId("step-value-2")).toHaveAttribute(
+      "title",
+      `{{credentials.segreto${suffix}}}`
+    );
+
+    // In the form the same rule: what it holds until you go to change it, and
+    // then the reference, because that is what typing edits.
+    await page.getByTestId("step-edit-1").click();
+    const field = page.getByTestId("step-value-input-1");
+    await expect(field).toHaveValue("Mario");
+    await field.focus();
+    await expect(field).toHaveValue(`{{variables.nome${suffix}}}`);
+  });
+
   test("renames a step and persists it", async ({ page }) => {
     await page.getByTestId("step-edit-1").click();
     const nameInput = page.getByTestId("step-name-input-1");

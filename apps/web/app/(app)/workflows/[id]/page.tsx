@@ -10,6 +10,7 @@ import {
   type RecordingResult,
   type Schedule,
   type SessionInfo,
+  type CredentialEntry,
   type Step,
   type StepVerification,
   type Workflow
@@ -36,6 +37,8 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [verifications, setVerifications] = useState<StepVerification[]>([]);
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState("");
+  /** The variables and secrets the steps reference, to show what they hold. */
+  const [values, setValues] = useState<CredentialEntry[]>([]);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Whether the last poll saw the recording running. The worker stops it by
@@ -67,6 +70,10 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     setDirty(false);
   }, [workflowId]);
 
+  const loadValues = useCallback(async () => {
+    setValues(await api.get<CredentialEntry[]>("/credentials"));
+  }, []);
+
   const loadSchedules = useCallback(async () => {
     const data = await api.get<Schedule[]>(`/workflows/${workflowId}/schedules`);
     setSchedules(data);
@@ -75,12 +82,13 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   useEffect(() => {
     loadWorkflow().catch((err) => setError(err.message));
     loadSchedules().catch(() => undefined);
+    loadValues().catch(() => undefined);
     try {
       setTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC");
     } catch {
       setTimezone("UTC");
     }
-  }, [loadWorkflow, loadSchedules]);
+  }, [loadWorkflow, loadSchedules, loadValues]);
 
   // Release the remote browser when leaving the page, so its slot does not stay
   // taken until the idle timeout reclaims it. `keepalive` lets the request
@@ -174,6 +182,22 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     });
   }
 
+  /**
+   * Forgets the remote browser. The toolbar is driven by whether a session is
+   * held, so a session that is gone has to be dropped rather than kept as a
+   * dead handle: leaving it offered "Chiudi browser" for a browser that had
+   * already closed, and no way back to "Avvia browser" but a reload.
+   */
+  const forgetSession = useCallback(
+    (why: string) => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      wasRecordingRef.current = false;
+      setSession(null);
+      log(why);
+    },
+    [log]
+  );
+
   function startPolling(sessionId: string) {
     if (pollRef.current) clearInterval(pollRef.current);
     pollRef.current = setInterval(async () => {
@@ -181,8 +205,11 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
         const info = await api.get<SessionInfo>(`/sessions/${sessionId}`);
         setSession((current) => (current ? { ...current, ...info } : current));
         if (info.state === "closed" || info.state === "error") {
-          if (pollRef.current) clearInterval(pollRef.current);
-          log(`Sessione ${info.state}`);
+          forgetSession(
+            info.state === "error"
+              ? `Sessione in errore: ${info.error ?? "causa sconosciuta"}`
+              : "Sessione chiusa"
+          );
           return;
         }
         // Capturing the closing action stops the recording on the worker, which
@@ -200,8 +227,12 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           }
         }
         wasRecordingRef.current = info.recording;
-      } catch {
-        /* transient errors are reported by explicit actions */
+      } catch (err) {
+        // A session the server no longer knows is gone for good; anything else
+        // is a hiccup the next tick will recover from.
+        if (err instanceof ApiError && err.status === 404) {
+          forgetSession("Sessione non più disponibile");
+        }
       }
     }, 1200);
   }
@@ -329,6 +360,9 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     await run("save", async () => {
       const saved = await persistSteps();
       await loadWorkflow();
+      // Saving creates every value the steps refer to, so the list the editor
+      // shows them from is out of date the moment the request returns.
+      await loadValues().catch(() => undefined);
       log(`${saved.length} step salvati`);
     });
   }
@@ -550,6 +584,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           <StepEditor
             steps={steps}
             verifications={verifications}
+            values={values}
             onChange={(next) => {
               setSteps(next);
               setDirty(true);

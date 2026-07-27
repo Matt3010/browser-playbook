@@ -257,7 +257,24 @@ These are the classes of defect this codebase actually produced, so look here fi
   address, same document, same text, for a quiet stretch — which is what a person
   waits for. Bounded, and it gives up rather than failing a run that has already
   succeeded. `apps/test-web` reproduces the gap on purpose: it routes 1.2 s after
-  the answer, and without that the e2e passed against the broken version.
+  the answer, and without that the e2e passed against the broken version. The
+  sampling that first implemented it is gone: a `MutationObserver` reports every
+  change there is and calls Node through an exposed function, so only the two
+  decisions remain — how much silence counts as the end, and how long we are
+  willing to wait at all. Neither is observable, both have a name.
+- **A name that exists is not a value that is there.** The editor now creates
+  every `{{variables.x}}` / `{{credentials.x}}` a saved step refers to, empty, so
+  the reference shows up in the credentials page ready to be filled instead of
+  naming nothing. That made "it exists" stop being proof there is anything to
+  type, so both run routes and the runner refuse an empty reference exactly as
+  they refuse a missing one — an empty secret sent to a login form is a failed
+  attempt against the real site. The list shows what a reference holds, `(vuota)`
+  when it holds nothing, dots for a secret; `hasValue` had to be fixed while doing
+  it, because it read the length of the *ciphertext* and encrypting "" is not empty.
+- **A dead handle is not a session.** The toolbar is driven by whether a session
+  is held, and a session that had ended was kept: it offered "Chiudi browser" for
+  a browser that had already closed, with no way back but a reload. A poll that
+  sees `closed`/`error`, or a 404, drops it.
 
 ### Things a test cannot pin down
 

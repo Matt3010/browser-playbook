@@ -13,31 +13,28 @@
  * idle and the page is still on its way — which is exactly the state the first
  * version of this photographed, a button reading "Creating repository…".
  *
- * So the run is over when the page has *stopped changing*: same address, same
- * document, same text, for a quiet stretch. That is what a person waits for.
+ * So the run is over when the page has *stopped changing*, which the page itself
+ * reports through a `MutationObserver` (see `quiet.ts`). Two waits remain that no
+ * event can replace, and both are decisions rather than measurements:
+ * how much silence counts as the end, and how long we are willing to wait at all.
  */
 
 /** What this needs from a page, so a test can stand in for one. */
 export interface SettleTarget {
   waitForLoadState(state: "load" | "networkidle", options?: { timeout?: number }): Promise<void>;
-  /** A cheap description of what the page is showing right now, or null. */
-  fingerprint(): Promise<string | null>;
+  /** Resolves when the page reports it has held still for `quietMs`. */
+  waitUntilQuiet(quietMs: number): Promise<void>;
 }
 
 /** The whole wait is bounded: a page that never settles must not hold the run. */
 export const SETTLE_TIMEOUT_MS = 20_000;
 /** How long nothing may change before the page counts as settled. */
 export const SETTLE_QUIET_MS = 2_000;
-/** How often the page is sampled while waiting for it to hold still. */
-export const SETTLE_SAMPLE_MS = 250;
 
 export interface SettleOptions {
   timeoutMs?: number;
   quietMs?: number;
-  sampleMs?: number;
 }
-
-const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * Never throws and never fails the execution: every step has already succeeded,
@@ -51,31 +48,21 @@ export async function settleAfterLastStep(
 ): Promise<void> {
   const timeoutMs = options.timeoutMs ?? SETTLE_TIMEOUT_MS;
   const quietMs = options.quietMs ?? SETTLE_QUIET_MS;
-  const sampleMs = options.sampleMs ?? SETTLE_SAMPLE_MS;
   const deadline = Date.now() + timeoutMs;
-
   const remaining = () => deadline - Date.now();
 
   await page.waitForLoadState("load", { timeout: timeoutMs }).catch(() => undefined);
   if (remaining() > 0) {
     await page.waitForLoadState("networkidle", { timeout: remaining() }).catch(() => undefined);
   }
+  if (remaining() <= 0) return;
 
-  let previous: string | null = null;
-  let unchangedSince = Date.now();
-
-  while (remaining() > 0) {
-    const current = await page.fingerprint().catch(() => null);
-    // A page that cannot be read is a page that cannot be waited for either.
-    if (current === null) return;
-
-    if (current === previous) {
-      if (Date.now() - unchangedSince >= quietMs) return;
-    } else {
-      previous = current;
-      unchangedSince = Date.now();
-    }
-
-    await sleep(Math.min(sampleMs, Math.max(remaining(), 0)));
-  }
+  await Promise.race([
+    page.waitUntilQuiet(quietMs).catch(() => undefined),
+    new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, remaining());
+      // Nothing else is waiting on this timer: let the process exit without it.
+      timer.unref?.();
+    })
+  ]);
 }

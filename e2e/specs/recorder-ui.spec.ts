@@ -136,6 +136,27 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
     await page.getByTestId("close-session").click();
   });
 
+  test("goes back to offering a browser when the session is gone", async ({ page }) => {
+    // The toolbar is driven by whether a session is held. A session that has
+    // ended has to be dropped rather than kept as a dead handle: it used to keep
+    // offering "Chiudi browser" for a browser that had already closed, with no
+    // way back but a reload.
+    await loginThroughUi(page);
+    const workflow = await client.createWorkflow(
+      `Sessione persa ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    const sessionId = await startSession(page, workflow.id);
+    await expect(page.getByTestId("close-session")).toBeVisible();
+
+    // Ended from elsewhere: the idle reaper, a worker restart, another tab.
+    await client.closeSession(sessionId);
+
+    await expect(page.getByTestId("start-browser")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("close-session")).toBeHidden();
+    await expect(page.getByTestId("live-log")).toContainText("Sessione");
+  });
+
   test("running straight after recording stores the secret the steps reference", async ({
     page
   }) => {

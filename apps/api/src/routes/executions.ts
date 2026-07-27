@@ -3,13 +3,9 @@ import { stat } from "fs/promises";
 import path from "path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import {
-  describeMissingReferences,
-  findMissingReferences,
-  isRunnableStepList,
-  StepSchema
-} from "@app/workflow-schema";
+import { isRunnableStepList, StepSchema } from "@app/workflow-schema";
 import { requireAuth, currentUser } from "../auth";
+import { referenceState, unresolvedReferences } from "../references";
 import { loadOwnedWorkflow, loadOwnedExecution } from "../ownership";
 import { WorkerHttpError } from "../worker-client";
 
@@ -17,21 +13,6 @@ const ListQuerySchema = z.object({
   workflowId: z.string().uuid().optional(),
   limit: z.coerce.number().int().min(1).max(200).default(50)
 });
-
-/**
- * Loads the names of the values a workflow can reference. Kept separate so both
- * the immediate-run and the scheduling route check the same thing.
- */
-async function availableValues(app: FastifyInstance, userId: string) {
-  const rows = await app.prisma.credential.findMany({
-    where: { userId },
-    select: { name: true, kind: true }
-  });
-  return {
-    variables: rows.filter((r) => r.kind === "variable").map((r) => r.name),
-    credentials: rows.filter((r) => r.kind === "secret").map((r) => r.name)
-  };
-}
 
 export async function executionRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireAuth);
@@ -69,12 +50,9 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
     // Refuse before starting a browser: a reference to a deleted credential would
     // otherwise only surface halfway through the run, after earlier steps already
     // had an effect on the target site.
-    const missing = findMissingReferences(steps, await availableValues(app, userId));
-    if (missing.length > 0) {
-      return reply.code(409).send({
-        error: `The workflow references values that do not exist: ${describeMissingReferences(missing)}`,
-        missingReferences: missing
-      });
+    const unresolved = unresolvedReferences(steps, await referenceState(app, userId));
+    if (unresolved) {
+      return reply.code(409).send(unresolved);
     }
 
     // A workflow acts on a real site, so running it twice means doing the thing

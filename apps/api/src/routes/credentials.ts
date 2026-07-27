@@ -62,15 +62,22 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
       where: { userId },
       orderBy: [{ kind: "asc" }, { name: "asc" }]
     });
-    return rows.map((row) => ({
+    return rows.map((row) => {
+      // Emptiness is a property of the value, not of the ciphertext: encrypting
+      // "" still produces an iv and a tag, so the stored length says nothing.
+      // A name now exists as soon as a step mentions it, so this is what tells
+      // an entry waiting to be filled from one that is ready to be used.
+      const plain = decryptSecret(row.encryptedValue, app.config.credentialsEncKey);
+      return {
       id: row.id,
       name: row.name,
       kind: row.kind,
-      value: row.kind === "variable" ? decryptSecret(row.encryptedValue, app.config.credentialsEncKey) : null,
-      hasValue: row.encryptedValue.length > 0,
+      value: row.kind === "variable" ? plain : null,
+      hasValue: plain.length > 0,
       createdAt: row.createdAt,
       updatedAt: row.updatedAt
-    }));
+      };
+    });
   });
 
   app.post("/", async (request, reply) => {

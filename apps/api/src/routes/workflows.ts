@@ -2,7 +2,7 @@ import { rm } from "fs/promises";
 import path from "path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
-import { assertSafeTargetUrl } from "@app/shared";
+import { assertSafeTargetUrl, encryptSecret, extractTemplateRefs } from "@app/shared";
 import { StepSchema, validateSteps, isRunnableStepList, type Step } from "@app/workflow-schema";
 import { requireAuth, currentUser } from "../auth";
 import { loadOwnedWorkflow } from "../ownership";
@@ -210,6 +210,8 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
+    await createReferencedValues(app, userId, steps);
+
     await app.prisma.$transaction([
       app.prisma.workflowStep.deleteMany({ where: { workflowId: workflow.id } }),
       app.prisma.workflowStep.createMany({
@@ -240,4 +242,44 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
     });
     return saved.map(rowToStep);
   });
+}
+
+/**
+ * Creates, empty, every value the saved steps refer to and that does not exist.
+ *
+ * A reference typed into the editor used to name nothing at all: the workflow
+ * saved happily and the run was refused later, with nowhere obvious to go and
+ * fill the value in. Created here, the name appears in the credentials page
+ * ready to be filled — and empty is still refused at run time, so nothing is
+ * ever typed into a real login form because a placeholder existed.
+ *
+ * `{{variables.x}}` becomes a variable and `{{credentials.x}}` a secret: what
+ * the reference says it is, is what it becomes.
+ */
+async function createReferencedValues(
+  app: FastifyInstance,
+  userId: string,
+  steps: Step[]
+): Promise<void> {
+  const wanted = new Map<string, "variable" | "secret">();
+  for (const step of steps) {
+    if (!step.value) continue;
+    for (const ref of extractTemplateRefs(step.value)) {
+      wanted.set(ref.key, ref.kind === "credentials" ? "secret" : "variable");
+    }
+  }
+  if (wanted.size === 0) return;
+
+  const existing = await app.prisma.credential.findMany({
+    where: { userId, name: { in: [...wanted.keys()] } },
+    select: { name: true }
+  });
+  const known = new Set(existing.map((row) => row.name));
+
+  for (const [name, kind] of wanted) {
+    if (known.has(name)) continue;
+    await app.prisma.credential.create({
+      data: { userId, name, kind, encryptedValue: encryptSecret("", app.config.credentialsEncKey) }
+    });
+  }
 }

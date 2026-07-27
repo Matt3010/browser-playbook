@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { randomUUID } from "crypto";
 import { StepSchema, type Step } from "./step";
-import { findMissingReferences, describeMissingReferences } from "./references";
+import {
+  findMissingReferences,
+  describeMissingReferences,
+  findEmptyReferences,
+  describeEmptyReferences
+} from "./references";
 
 function fill(name: string, value: string, enabled = true): Step {
   return StepSchema.parse({
@@ -116,5 +121,45 @@ describe("describeMissingReferences", () => {
     expect(text).toContain("credentials.a");
     expect(text).toContain("variables.b");
     expect(text).toContain(";");
+  });
+});
+
+describe("findEmptyReferences", () => {
+  const empty = { variables: ["repoName"], credentials: ["password"] };
+
+  it("reports a value that exists but holds nothing", () => {
+    const found = findEmptyReferences(
+      [fill("Inserisci Password", "{{credentials.password}}")],
+      empty
+    );
+    expect(found).toHaveLength(1);
+    expect(found[0]).toMatchObject({ kind: "credentials", name: "password" });
+  });
+
+  it("says nothing about a value that holds something", () => {
+    expect(findEmptyReferences([fill("Nome", "{{variables.other}}")], empty)).toEqual([]);
+  });
+
+  it("ignores a disabled step, which will not run", () => {
+    expect(
+      findEmptyReferences([fill("Disabilitato", "{{variables.repoName}}", false)], empty)
+    ).toEqual([]);
+  });
+
+  it("keeps the kinds apart: a variable does not answer for a credential", () => {
+    const found = findEmptyReferences(
+      [fill("Nome", "{{variables.password}}")],
+      { variables: [], credentials: ["password"] }
+    );
+    expect(found).toEqual([]);
+  });
+
+  it("names the reference and the steps that use it", () => {
+    const text = describeEmptyReferences(
+      findEmptyReferences([fill("Inserisci Password", "{{credentials.password}}")], empty)
+    );
+    expect(text).toContain("{{credentials.password}}");
+    expect(text).toContain("is empty");
+    expect(text).toContain("Inserisci Password");
   });
 });
