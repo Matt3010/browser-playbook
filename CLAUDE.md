@@ -271,6 +271,12 @@ These are the classes of defect this codebase actually produced, so look here fi
   attempt against the real site. The list shows what a reference holds, `(vuota)`
   when it holds nothing, dots for a secret; `hasValue` had to be fixed while doing
   it, because it read the length of the *ciphertext* and encrypting "" is not empty.
+- **Write-only is not read-only.** The values page could create and delete but
+  never change anything, so correcting a typo in a variable meant deleting it and
+  typing the name again — and every workflow referencing it was refused in
+  between. A variable is ordinary data and is edited from what it holds; a secret
+  is replaced, from an empty field, because the server never sends it back and a
+  prefilled-looking field would be a lie about what saving would store.
 - **A tablet is not a small desktop.** Made usable on an iPad, which mostly meant
   measuring rather than redesigning: the layout already fitted 834 px, but every
   field was 14 px — Safari zooms towards anything smaller than 16 and never zooms

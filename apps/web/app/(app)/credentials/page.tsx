@@ -9,6 +9,9 @@ export default function CredentialsPage() {
   const [value, setValue] = useState("");
   const [kind, setKind] = useState<"variable" | "secret">("variable");
   const [error, setError] = useState<string | null>(null);
+  /** The entry being changed, and what will be written when it is saved. */
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
 
   async function load() {
     setEntries(await api.get<CredentialEntry[]>("/credentials"));
@@ -34,6 +37,29 @@ export default function CredentialsPage() {
   async function remove(id: string) {
     await api.del(`/credentials/${id}`);
     await load();
+  }
+
+  /**
+   * Opens an entry for change. A variable is ordinary data and starts from what
+   * it holds; a secret starts empty, because the server never sends it back and
+   * a field that looked prefilled would be a lie about what saving would store.
+   */
+  function edit(entry: CredentialEntry) {
+    setError(null);
+    setDraft(entry.kind === "secret" ? "" : entry.value ?? "");
+    setEditingId(entry.id);
+  }
+
+  async function commit(entry: CredentialEntry) {
+    setError(null);
+    try {
+      await api.patch(`/credentials/${entry.id}`, { value: draft });
+      setEditingId(null);
+      setDraft("");
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Errore inatteso");
+    }
   }
 
   return (
@@ -105,15 +131,70 @@ export default function CredentialsPage() {
       ) : (
         <ul className="space-y-2" data-testid="credential-list">
           {entries.map((entry) => (
-            <li key={entry.id} className="card flex items-center gap-3">
+            <li
+              key={entry.id}
+              className="card flex flex-wrap items-center gap-3"
+              data-testid={`credential-row-${entry.name}`}
+            >
               <span className="badge bg-slate-100 text-slate-700">{entry.kind}</span>
               <code className="flex-1 text-sm">{entry.name}</code>
-              <span className="text-sm text-slate-500" data-testid={`credential-value-${entry.name}`}>
-                {entry.kind === "secret" ? "••••••• (nascosto)" : entry.value}
-              </span>
-              <button className="btn-danger" onClick={() => void remove(entry.id)}>
-                Elimina
-              </button>
+
+              {editingId === entry.id ? (
+                <>
+                  <input
+                    className="input max-w-xs"
+                    type={entry.kind === "secret" ? "password" : "text"}
+                    value={draft}
+                    autoFocus
+                    onChange={(e) => setDraft(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") void commit(entry);
+                      if (e.key === "Escape") setEditingId(null);
+                    }}
+                    placeholder={entry.kind === "secret" ? "Nuovo valore" : ""}
+                    data-testid={`credential-input-${entry.name}`}
+                  />
+                  <button
+                    className="btn"
+                    onClick={() => void commit(entry)}
+                    data-testid={`credential-save-${entry.name}`}
+                  >
+                    Salva
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => setEditingId(null)}
+                    data-testid={`credential-cancel-${entry.name}`}
+                  >
+                    Annulla
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span
+                    className="text-sm text-slate-500"
+                    data-testid={`credential-value-${entry.name}`}
+                  >
+                    {entry.kind === "secret"
+                      ? entry.hasValue
+                        ? "••••••• (nascosto)"
+                        : "(vuota)"
+                      : entry.hasValue
+                        ? entry.value
+                        : "(vuota)"}
+                  </span>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => edit(entry)}
+                    data-testid={`credential-edit-${entry.name}`}
+                  >
+                    {entry.kind === "secret" ? "Sostituisci" : "Modifica"}
+                  </button>
+                  <button className="btn-danger" onClick={() => void remove(entry.id)}>
+                    Elimina
+                  </button>
+                </>
+              )}
             </li>
           ))}
         </ul>

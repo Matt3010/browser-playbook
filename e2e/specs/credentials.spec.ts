@@ -1,0 +1,96 @@
+import { test, expect, type Page } from "@playwright/test";
+import { AppClient, SEED_EMAIL, SEED_PASSWORD } from "../helpers/app-client";
+
+/**
+ * The values a workflow types. A variable is ordinary data and can be read and
+ * corrected; a secret is write-only — the server never sends it back, so the
+ * page cannot offer to edit it, only to replace it.
+ */
+
+async function loginThroughUi(page: Page): Promise<void> {
+  await page.goto("/login");
+  await page.getByLabel("Email").fill(SEED_EMAIL);
+  await page.getByLabel("Password").fill(SEED_PASSWORD);
+  await page.getByRole("button", { name: "Login" }).click();
+  await expect(page.getByTestId("dashboard")).toBeVisible();
+}
+
+test.describe("variables and secrets", () => {
+  let client: AppClient;
+  let suffix: string;
+
+  test.beforeEach(async ({ page }) => {
+    client = new AppClient();
+    await client.login();
+    suffix = String(Date.now());
+    await loginThroughUi(page);
+    await page.goto("/credentials");
+  });
+
+  test("corrects a variable in place", async ({ page }) => {
+    const name = `citta${suffix}`;
+    await client.saveCredential(name, "Verona", "variable");
+    await page.reload();
+
+    await expect(page.getByTestId(`credential-value-${name}`)).toHaveText("Verona");
+    await page.getByTestId(`credential-edit-${name}`).click();
+
+    const field = page.getByTestId(`credential-input-${name}`);
+    await expect(field, "a variable is editable, so it starts from what it holds").toHaveValue(
+      "Verona"
+    );
+    await field.fill("Vicenza");
+    await page.getByTestId(`credential-save-${name}`).click();
+
+    await expect(page.getByTestId(`credential-value-${name}`)).toHaveText("Vicenza");
+    const stored = (await client.listCredentials()).find((c) => c.name === name);
+    expect(stored).toMatchObject({ value: "Vicenza", hasValue: true });
+  });
+
+  test("replaces a secret without ever showing it", async ({ page }) => {
+    const name = `token${suffix}`;
+    await client.saveCredential(name, "il-vecchio-segreto", "secret");
+    await page.reload();
+
+    const row = page.getByTestId(`credential-row-${name}`);
+    await expect(row).not.toContainText("il-vecchio-segreto");
+
+    await page.getByTestId(`credential-edit-${name}`).click();
+    const field = page.getByTestId(`credential-input-${name}`);
+    // Never prefilled: the server does not send a secret back, and a field that
+    // looked prefilled would be a lie about what saving is going to store.
+    await expect(field).toHaveValue("");
+    await expect(field).toHaveAttribute("type", "password");
+
+    await field.fill("il-nuovo-segreto");
+    await page.getByTestId(`credential-save-${name}`).click();
+
+    await expect(row).toContainText("nascosto");
+    await expect(row).not.toContainText("il-nuovo-segreto");
+    const stored = (await client.listCredentials()).find((c) => c.name === name);
+    expect(stored).toMatchObject({ value: null, hasValue: true });
+  });
+
+  test("says when a value holds nothing", async ({ page }) => {
+    // Saving a workflow creates every reference it makes, empty. Those entries
+    // are exactly the ones waiting to be filled in here.
+    const name = `daRiempire${suffix}`;
+    await client.saveCredential(name, "", "variable");
+    await page.reload();
+
+    await expect(page.getByTestId(`credential-value-${name}`)).toHaveText("(vuota)");
+  });
+
+  test("gives up an edit without changing anything", async ({ page }) => {
+    const name = `annulla${suffix}`;
+    await client.saveCredential(name, "originale", "variable");
+    await page.reload();
+
+    await page.getByTestId(`credential-edit-${name}`).click();
+    await page.getByTestId(`credential-input-${name}`).fill("scartato");
+    await page.getByTestId(`credential-cancel-${name}`).click();
+
+    await expect(page.getByTestId(`credential-value-${name}`)).toHaveText("originale");
+    expect((await client.listCredentials()).find((c) => c.name === name)?.value).toBe("originale");
+  });
+});
