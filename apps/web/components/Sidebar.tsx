@@ -40,22 +40,31 @@ const COLLAPSED_KEY = "sidebar-collapsed";
 const NARROW_PX = 1024;
 
 /**
- * The folded/unfolded choice, remembered across pages and reloads.
+ * The folded/unfolded choice, remembered across pages and reloads, and given up
+ * while the window is too narrow to afford it.
  *
  * Decided once the browser is there: on the server there is no window to measure
  * and no choice to read, so the first render is unfolded and the effect corrects
- * it. A person's choice wins over the width — they made it on this screen.
+ * it. Below the threshold it folds and stays folded — a quarter of a narrow
+ * window is taken from the page that needs it most — and it can still be opened
+ * by hand from there: folding is the default, not a rule. Widen the window again
+ * and the remembered choice comes back.
  */
 export function useRememberedCollapse(narrowPx: number = NARROW_PX): [boolean, () => void] {
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
-    const stored = window.localStorage.getItem(COLLAPSED_KEY);
-    if (stored !== null) {
-      setCollapsed(stored === "true");
-      return;
-    }
-    setCollapsed(window.innerWidth < narrowPx);
+    const narrow = window.matchMedia(`(max-width: ${narrowPx - 1}px)`);
+    const apply = () => {
+      if (narrow.matches) {
+        setCollapsed(true);
+        return;
+      }
+      setCollapsed(window.localStorage.getItem(COLLAPSED_KEY) === "true");
+    };
+    apply();
+    narrow.addEventListener("change", apply);
+    return () => narrow.removeEventListener("change", apply);
   }, [narrowPx]);
 
   const toggle = () =>
@@ -90,7 +99,13 @@ export function Sidebar({
 }: SidebarProps) {
   return (
     <aside
-      className={`sticky top-0 flex h-screen shrink-0 flex-col gap-1 border-r border-slate-200 bg-white p-2 transition-[width] ${
+      /*
+       * Nothing in here may wrap. The labels are wider than the folded column,
+       * so left to themselves they turn one line into two halfway through the
+       * animation: the rows grow, the sidebar shuffles, and the page beside it
+       * moves with it. They are clipped instead, and the width does the talking.
+       */
+      className={`sticky top-0 flex h-screen shrink-0 flex-col gap-1 overflow-hidden whitespace-nowrap border-r border-slate-200 bg-white p-2 transition-[width] ${
         collapsed ? "w-14" : "w-60"
       }`}
       data-testid="sidebar"
@@ -107,7 +122,9 @@ export function Sidebar({
         >
           {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
         </button>
-        {collapsed || !title ? null : <span className="font-semibold">{title}</span>}
+        {collapsed || !title ? null : (
+          <span className="truncate font-semibold">{title}</span>
+        )}
       </div>
 
       <nav className="mt-2 flex flex-1 flex-col gap-1 text-sm">

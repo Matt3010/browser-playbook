@@ -69,6 +69,55 @@ test.describe("the application shell", () => {
     await expect(page.getByTestId("logout")).toBeVisible();
   });
 
+  test("nothing reflows while it folds and unfolds", async ({ page }) => {
+    // The labels are wider than the folded column. Left to wrap, they turn one
+    // line into two halfway through the animation: the rows grow, the whole
+    // sidebar shuffles, and the page next to it moves with it.
+    const rowHeight = async () =>
+      (await page.getByTestId("nav-credentials").boundingBox())!.height;
+
+    const unfolded = await rowHeight();
+    await page.getByTestId("sidebar-toggle").click();
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "true");
+    await expect.poll(rowHeight).toBe(unfolded);
+
+    await page.getByTestId("sidebar-toggle").click();
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+    await expect.poll(rowHeight).toBe(unfolded);
+
+    // Nothing in it may wrap: not the labels, not the title, not the button.
+    const wrapping = await page
+      .getByTestId("sidebar")
+      .evaluate((aside) =>
+        [...aside.querySelectorAll("*")]
+          .filter((el) => getComputedStyle(el).whiteSpace === "normal" && el.children.length === 0)
+          .map((el) => el.textContent?.trim())
+          .filter((text): text is string => !!text && text.length > 0)
+      );
+    expect(wrapping, "everything with text in the sidebar must be kept on one line").toEqual([]);
+  });
+
+  test("folds itself when the window gets narrow, and comes back when it does not", async ({
+    page
+  }) => {
+    // A sidebar is a quarter of a narrow window, taken from the page that needs
+    // it most. It should not have to be folded by hand every time the window is
+    // resized — or the browser opened next to something else.
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+
+    await page.setViewportSize({ width: 900, height: 800 });
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "true");
+
+    await page.setViewportSize({ width: 1400, height: 800 });
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+
+    // Still openable by hand while narrow: folding is the default, not a rule.
+    await page.setViewportSize({ width: 900, height: 800 });
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "true");
+    await page.getByTestId("sidebar-toggle").click();
+    await expect(page.getByTestId("sidebar")).toHaveAttribute("data-collapsed", "false");
+  });
+
   test("still says who is logged in", async ({ page }) => {
     await expect(page.getByTestId("current-user")).toContainText(SEED_EMAIL);
   });

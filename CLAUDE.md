@@ -276,7 +276,11 @@ These are the classes of defect this codebase actually produced, so look here fi
   starts folded, because the page it takes width from is the one showing a remote
   screen. A person's choice wins over the width — they made it on this screen.
   The fold is animated, so a test asserting the folded width has to wait for it
-  rather than read it on the spot.
+  rather than read it on the spot — and nothing inside it may wrap: the labels
+  are wider than the folded column, so left to themselves they turn one line into
+  two halfway through the animation and the page beside it moves too. It follows
+  the width as it changes, not only at load: a `matchMedia` listener, because a
+  window is resized and a browser is opened next to other things.
 - **A stop that does not wait is a workflow cut in half.** Docker sends SIGTERM
   and kills ten seconds later by default. The worker answers SIGTERM by letting
   the running job finish — but ten seconds is not a run, so a deploy during an
