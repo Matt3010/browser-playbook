@@ -23,6 +23,11 @@ export interface TestConfig {
    * not instantaneous, and the runner must still be there when it lands.
    */
   checkoutDelayMs: number;
+  /**
+   * Delay in ms before /slow-target answers, so a navigation a click caused
+   * commits long after the click — the way a real site behaves.
+   */
+  navigationDelayMs: number;
 }
 
 export interface TestState {
@@ -48,7 +53,8 @@ export const DEFAULT_CONFIG: TestConfig = {
   missingElement: false,
   failApi: false,
   rejectLogin: false,
-  checkoutDelayMs: 0
+  checkoutDelayMs: 0,
+  navigationDelayMs: 0
 };
 
 function freshState(): TestState {

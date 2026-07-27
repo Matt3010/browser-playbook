@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import {
+  APP_BASE_URL,
   AppClient,
   SHOP_WEB_INTERNAL_URL,
   TEST_WEB_INTERNAL_URL,
@@ -220,9 +221,9 @@ test.describe("recorder action capture", () => {
   test("keeps the required marker out of the recorded name", async () => {
     // The asterisk of a required field is drawn on screen and hidden from the
     // accessibility tree. Reading the label's raw text put it in the recorded
-    // name, which then matched nothing: on GitHub's "Repository name*" the
-    // primary selector missed on every run and the step cost a full timeout
-    // before the fallback saved it.
+    // name, which then matched nothing: on a real site's required fields the
+    // primary selector missed on every run and each such step cost a full
+    // timeout before the fallback saved it.
     const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
     try {
       await client.setRecording(session.sessionId, true);
@@ -248,6 +249,58 @@ test.describe("recorder action capture", () => {
       };
       expect(check.status).toBe("ok");
       expect(check.usedFallback, "the primary selector must resolve").toBe(false);
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
+  test("does not record the navigation a click caused, however late it lands", async () => {
+    // Whether a navigation belongs to the click before it is a question about
+    // cause, and it used to be answered with a stopwatch: a navigation arriving
+    // more than a moment after the action was recorded as a separate goto. On a
+    // site that answers slowly every transition arrives late, so the workflow
+    // replayed each one twice — click, then navigate to where the click had
+    // already gone.
+    await configureTestWeb({ navigationDelayMs: 2500 });
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/slow-link`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, { kind: "click", selector: "#slow-link" });
+      await expect
+        .poll(async () => (await client.getSession(session.sessionId)).currentUrl, {
+          timeout: 30_000
+        })
+        .toContain("/slow-target");
+
+      const recording = await client.getRecording(session.sessionId);
+      expect(recording.steps.filter((s) => s.type === "click")).toHaveLength(1);
+      expect(
+        recording.steps.filter((s) => s.value?.includes("/slow-target")),
+        "the click already goes there"
+      ).toHaveLength(0);
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
+  test("records a navigation the user asked for, even straight after an action", async () => {
+    // The other direction, and the same defect: typing an address right after
+    // clicking something was swallowed as if the click had caused it.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, { kind: "click", selector: "#real-button" });
+      await client.navigateSession(session.sessionId, `${TEST_WEB_INTERNAL_URL}/checkout`);
+
+      await expect
+        .poll(
+          async () =>
+            (await client.getRecording(session.sessionId)).steps.some(
+              (s) => s.type === "goto" && (s.value ?? "").includes("/checkout")
+            ),
+          { timeout: 30_000 }
+        )
+        .toBe(true);
     } finally {
       await client.closeSession(session.sessionId).catch(() => undefined);
     }
@@ -513,9 +566,56 @@ test.describe("closing action captured without being performed", () => {
         "/checkout/confirmed"
       );
       expect((await getTestWebState()).orders).toHaveLength(1);
+      expect(
+        (execution.artifacts ?? []).some((a) => a.type === "screenshot"),
+        "the result of the closing action must be shown, not only described"
+      ).toBe(true);
     } finally {
       await client.closeSession(session.sessionId).catch(() => undefined);
     }
+  });
+
+  test("photographs the result of the last step, closing action or not", async () => {
+    // What the run produced is a picture, not a URL: the page may have been
+    // replaced by a confirmation, or merely rearranged in place. Only failures
+    // used to leave anything to look at, and the browser is gone moments later.
+    const workflow = await client.createWorkflow(
+      `Risultato finale ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/checkout`
+    );
+    await client.putSteps(workflow.id, [
+      step({
+        type: "goto",
+        name: "Vai al checkout",
+        value: `${TEST_WEB_INTERNAL_URL}/checkout`
+      }),
+      step({
+        type: "fill",
+        name: "Inserisci la nota",
+        value: "consegna al piano",
+        selector: { strategy: "id", value: "order-note", fallback: null, pageId: "main", frame: null }
+      }),
+      // An ordinary last step: nothing here is marked as a closing action.
+      step({
+        type: "click",
+        name: "Clicca Acquista ora",
+        selector: { strategy: "id", value: "place-order", fallback: null, pageId: "main", frame: null }
+      })
+    ]);
+
+    const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(execution.status, `execution failed: ${execution.errorMessage ?? ""}`).toBe("completed");
+
+    const shot = (execution.artifacts ?? []).find((a) => a.type === "screenshot");
+    expect(shot, "a completed run must leave a picture of where it ended").toBeTruthy();
+
+    const file = await fetch(`${APP_BASE_URL}/api/artifacts/${shot!.id}/file`, {
+      headers: { cookie: client.sessionCookie }
+    });
+    expect(file.status).toBe(200);
+    expect(file.headers.get("content-type")).toBe("image/png");
+    const bytes = Buffer.from(await file.arrayBuffer());
+    expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   });
 
   test("refuses a second closing action and refuses arming outside recording", async () => {

@@ -86,6 +86,22 @@ test.describe("visual step editor", () => {
     await expect(page.getByTestId("step-name-1")).toHaveText("Inserisci Nome");
   });
 
+  test("renames the workflow itself", async ({ page }) => {
+    // The name is chosen once, in the creation form, and a workflow lives for
+    // months: the API has always accepted a new one, the page just never offered
+    // to send it.
+    const renamed = `Editor rinominato ${Date.now()}`;
+    await page.getByTestId("rename-workflow").click();
+    await page.getByTestId("workflow-name-input").fill(renamed);
+    await page.getByTestId("rename-save").click();
+
+    await expect(page.getByTestId("workflow-name")).toHaveText(renamed);
+    expect((await client.getWorkflow(workflowId)).name).toBe(renamed);
+
+    await page.reload();
+    await expect(page.getByTestId("workflow-name")).toHaveText(renamed);
+  });
+
   test("renames a step and persists it", async ({ page }) => {
     await page.getByTestId("step-edit-1").click();
     const nameInput = page.getByTestId("step-name-input-1");

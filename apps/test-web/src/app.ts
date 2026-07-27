@@ -47,7 +47,8 @@ export async function buildTestWeb(): Promise<FastifyInstance> {
     const numbers: Array<keyof TestConfig> = [
       "dashboardDelayMs",
       "delayedButtonMs",
-      "checkoutDelayMs"
+      "checkoutDelayMs",
+      "navigationDelayMs"
     ];
     for (const key of numbers) {
       if (key in body) {
@@ -662,6 +663,34 @@ ${confirmButton}
       });
   }
 </script>`
+      )
+    );
+  });
+
+  // ---- a link whose destination is slow to answer ---------------------------
+
+  /**
+   * The navigation a click causes does not commit with the click: on a real site
+   * it lands seconds later. A recorder that decides "this navigation belongs to
+   * that click" by how quickly it arrived gets it wrong on every slow site.
+   */
+  app.get("/slow-link", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Link lento - test-web",
+        `<h1>Link lento</h1>
+<a id="slow-link" href="/slow-target">Vai alla destinazione lenta</a>`
+      )
+    )
+  );
+
+  app.get("/slow-target", async (_request, reply) => {
+    const delay = getState().config.navigationDelayMs;
+    if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    return reply.type("text/html").send(
+      page(
+        "Destinazione - test-web",
+        `<h1>Destinazione</h1><p data-testid="slow-arrived">Arrivato.</p>`
       )
     );
   });

@@ -111,7 +111,10 @@ export class AppClient {
   }
 
   getWorkflow(id: string) {
-    return this.ok<{ id: string; status: string; steps: Step[] }>("GET", `/api/workflows/${id}`);
+    return this.ok<{ id: string; name: string; status: string; steps: Step[] }>(
+      "GET",
+      `/api/workflows/${id}`
+    );
   }
 
   putSteps(workflowId: string, steps: unknown[]) {

@@ -175,7 +175,11 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
 
       {screenshots.length > 0 ? (
         <section className="card">
-          <h2 className="mb-2 font-medium">Screenshot errore</h2>
+          {/* A run leaves a picture either way: of what stopped it, or of what it
+              produced. Which one it is follows from how the execution ended. */}
+          <h2 className="mb-2 font-medium">
+            {execution.status === "completed" ? "Risultato finale" : "Screenshot errore"}
+          </h2>
           <div className="space-y-2" data-testid="execution-screenshots">
             {screenshots.map((artifact) => (
               // A plain <img> is intentional: the artifact is served by the API
@@ -183,9 +187,13 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
               <img
                 key={artifact.id}
                 src={`/api/artifacts/${artifact.id}/file`}
-                alt="Screenshot dell'errore"
+                alt={
+                  execution.status === "completed"
+                    ? "Schermata della pagina alla fine del workflow"
+                    : "Screenshot dell'errore"
+                }
                 className="w-full rounded border border-slate-200"
-                data-testid="error-screenshot"
+                data-testid="execution-screenshot"
               />
             ))}
           </div>

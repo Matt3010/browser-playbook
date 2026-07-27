@@ -34,6 +34,8 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [timezone, setTimezone] = useState("Europe/Rome");
   const [dirty, setDirty] = useState(false);
   const [verifications, setVerifications] = useState<StepVerification[]>([]);
+  const [renaming, setRenaming] = useState(false);
+  const [nameDraft, setNameDraft] = useState("");
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Whether the last poll saw the recording running. The worker stops it by
@@ -122,11 +124,35 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     }
   }
 
+  /**
+   * Renames the workflow. The response is merged into the loaded workflow rather
+   * than reloading it: reloading replaces the step list with the saved one, and
+   * a rename in the middle of a recording would throw away everything recorded
+   * since the last save.
+   */
+  async function renameWorkflow() {
+    const next = nameDraft.trim();
+    if (!next || next === workflow?.name) {
+      setRenaming(false);
+      return;
+    }
+    await run("rename", async () => {
+      const updated = await api.patch<Workflow>(`/workflows/${workflowId}`, { name: next });
+      setWorkflow((current) => (current ? { ...current, name: updated.name } : current));
+      setRenaming(false);
+      log(`Workflow rinominato in "${updated.name}"`);
+    });
+  }
+
   async function startBrowser() {
     await run("start", async () => {
       if (startUrl !== workflow?.startUrl) {
-        await api.patch(`/workflows/${workflowId}`, { startUrl });
-        await loadWorkflow();
+        const updated = await api.patch<Workflow>(`/workflows/${workflowId}`, { startUrl });
+        // Merged, not reloaded, for the same reason as the rename: the editor may
+        // be holding a recording that has not been saved yet.
+        setWorkflow((current) =>
+          current ? { ...current, startUrl: updated.startUrl } : current
+        );
       }
       const created = await api.post<SessionInfo>("/sessions", { startUrl, workflowId });
       setSession(created);
@@ -338,9 +364,52 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   return (
     <div className="space-y-3" data-testid="recorder-page">
       <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold" data-testid="workflow-name">
-          {workflow.name}
-        </h1>
+        {renaming ? (
+          <>
+            <input
+              className="input w-72 text-lg font-semibold"
+              value={nameDraft}
+              autoFocus
+              onChange={(event) => setNameDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void renameWorkflow();
+                if (event.key === "Escape") setRenaming(false);
+              }}
+              data-testid="workflow-name-input"
+            />
+            <button
+              className="btn"
+              onClick={() => void renameWorkflow()}
+              disabled={busy !== null}
+              data-testid="rename-save"
+            >
+              Salva nome
+            </button>
+            <button
+              className="btn-secondary"
+              onClick={() => setRenaming(false)}
+              data-testid="rename-cancel"
+            >
+              Annulla
+            </button>
+          </>
+        ) : (
+          <>
+            <h1 className="text-xl font-semibold" data-testid="workflow-name">
+              {workflow.name}
+            </h1>
+            <button
+              className="btn-secondary"
+              onClick={() => {
+                setNameDraft(workflow.name);
+                setRenaming(true);
+              }}
+              data-testid="rename-workflow"
+            >
+              Rinomina
+            </button>
+          </>
+        )}
         <span className="badge bg-slate-100 text-slate-700" data-testid="workflow-status">
           {workflow.status}
         </span>
@@ -437,9 +506,13 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
         </button>
       </div>
 
-      {/* browser + steps */}
-      <div className="grid gap-3 lg:grid-cols-[1.6fr_1fr]">
-        <div className="card h-[520px] overflow-hidden p-0" data-testid="browser-panel">
+      {/* browser + steps, stacked: the stream gets the full width, and its box
+          keeps the remote screen's 16:10 ratio so nothing is letterboxed. */}
+      <div className="grid gap-3">
+        <div
+          className="card aspect-[16/10] max-h-[78vh] overflow-hidden p-0"
+          data-testid="browser-panel"
+        >
           {session?.vncPath ? (
             <VncViewer path={session.vncPath} onStatusChange={setVncStatus} />
           ) : (
@@ -449,7 +522,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           )}
         </div>
 
-        <div className="card h-[520px] overflow-hidden p-0">
+        <div className="card h-[460px] overflow-hidden p-0">
           <StepEditor
             steps={steps}
             verifications={verifications}

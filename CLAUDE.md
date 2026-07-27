@@ -205,7 +205,8 @@ These are the classes of defect this codebase actually produced, so look here fi
   now. Splitting a write in two is fine; splitting it in two *places* is not.
 - **A generated id with a suffix is still generated.** `isGeneratedId` knew
   `_r_e_` but not `_r_16_--label`, which is what React's `useId` looks like once
-  the component appends its own suffix — GitHub's repository visibility radios.
+  the component appends its own suffix — the shape a real site's radio labels
+  turned out to have.
   The bare form was rejected, the suffixed one sailed through as a *fallback*
   selector, and the counter moves whenever anything renders before it: the
   fallback then points at another control and the run clicks it. A rule that
@@ -213,7 +214,7 @@ These are the classes of defect this codebase actually produced, so look here fi
 - **The name the eye reads is not the name the machine matches.** A required
   field is marked with an asterisk hidden from the accessibility tree
   (`<span aria-hidden="true">*</span>` inside the label). The recorder read the
-  label's `textContent`, stored `Repository name*`, and Playwright — which
+  label's `textContent`, stored the name with the asterisk in it, and Playwright — which
   computes the accessible name properly — matched nothing: every run spent the
   full step timeout on the primary selector before the fallback rescued it, on
   every step of that shape. Names now come from `accessibleTextOf`, which skips
@@ -229,7 +230,25 @@ These are the classes of defect this codebase actually produced, so look here fi
   the whole point of the run. `settleAfterLastStep` waits for load and then for
   the network to go quiet, bounded, swallowing everything: the steps have already
   succeeded, and a page that never goes quiet must not fail a good run. It also
-  made `currentUrl` truthful — it used to report the page the run left.
+  made `currentUrl` truthful — it used to report the page the run left. What the
+  run produced is now photographed there too: only failures used to leave
+  anything to look at.
+- **Cause answered with a stopwatch.** Whether a navigation belongs to the click
+  before it was decided by a 1.5 s window: later than that and it was recorded as
+  a separate `goto`. On a site that answers slowly — which is most of them — every
+  transition arrives later than that, so each one was recorded twice: the click,
+  then a goto to where the click had already gone. In the other direction, an
+  address typed straight after a click was swallowed as
+  its consequence. The browser answers the question itself: a navigation the
+  document started (link, form, `location.href`) carries a referer, one typed
+  into the address bar does not, and client-side routing issues no request at
+  all. Timing heuristics are a guess; ask the source of truth instead.
+- **Reloading to refresh one field discards the rest.** Changing the start URL
+  patched the workflow and then called `loadWorkflow()`, which replaces the step
+  list with the saved one — so doing it while a recording was in progress threw
+  the unsaved steps away without a word. A response that already contains the new
+  value is merged into the loaded workflow instead. Renaming, added at the same
+  time, does the same. Before reloading anything, ask what else the reload owns.
 
 ### Things a test cannot pin down
 

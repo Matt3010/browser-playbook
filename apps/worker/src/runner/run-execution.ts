@@ -304,9 +304,19 @@ export async function runExecution(
 
     // Nothing follows the last step to wait for what it started, and the browser
     // is closed moments later. Give its effect the chance to land before the
-    // execution decides where it ended up.
+    // execution decides where it ended up, then photograph it.
     const lastPage = session.getActivePage();
-    if (lastPage) await settleAfterLastStep(lastPage);
+    if (lastPage) {
+      await settleAfterLastStep(lastPage);
+      await captureResult({
+        prisma,
+        page: lastPage,
+        executionId: input.executionId,
+        executionDir,
+        writeLog,
+        log
+      });
+    }
 
     const totalMs = Date.now() - startedAt;
     await writeLog("info", `Execution completed in ${totalMs} ms`);
@@ -429,6 +439,41 @@ interface FailureInput {
     stepId?: string | null
   ) => Promise<void>;
   log: Logger;
+}
+
+/**
+ * Photographs where the run ended, once the last step has landed.
+ *
+ * What a workflow produces is a picture, not a URL: the page may have been
+ * replaced by a confirmation, or merely rearranged in place — an order accepted,
+ * a repository created. Only failures used to leave anything to look at, and the
+ * browser is gone moments later, so a completed run could only be believed.
+ *
+ * Best effort: every step has already succeeded, and no run may be failed by a
+ * screenshot that could not be taken.
+ */
+async function captureResult(input: {
+  prisma: PrismaClient;
+  page: NonNullable<ReturnType<BrowserSession["getActivePage"]>>;
+  executionId: string;
+  executionDir: string;
+  writeLog: (
+    level: "info" | "warn" | "error",
+    message: string,
+    stepId?: string | null
+  ) => Promise<void>;
+  log: Logger;
+}): Promise<void> {
+  try {
+    const file = path.join(input.executionDir, "result.png");
+    await input.page.screenshot({ path: file, fullPage: false, timeout: 15_000 });
+    await input.prisma.artifact.create({
+      data: { executionId: input.executionId, type: "screenshot", path: file }
+    });
+    await input.writeLog("info", "Saved the screenshot of the result");
+  } catch (err) {
+    input.log.warn({ err }, "Could not capture the result screenshot");
+  }
 }
 
 async function handleFailure(input: FailureInput): Promise<void> {

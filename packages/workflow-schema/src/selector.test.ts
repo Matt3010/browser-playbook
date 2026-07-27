@@ -257,9 +257,10 @@ describe("isGeneratedId", () => {
 
   /**
    * React's useId is a counter, and the id it produces is routinely suffixed by
-   * the component using it. GitHub's repository visibility radios are labelled
-   * `_r_16_--label`: recognising only the bare `_r_16_` form let that through as
-   * a fallback, and the counter shifts with anything that renders before it.
+   * the component using it, which is how a real site's radio labels turned out
+   * to be identified. Recognising only the bare `_r_16_` form let `_r_16_--label`
+   * through as a fallback, and the counter shifts with anything that renders
+   * before it.
    */
   it("detects a generated id that carries a suffix", () => {
     for (const id of ["_r_16_--label", "_r_e_-input", "_r_1a_--description", ":r0:-label"]) {

@@ -5,7 +5,8 @@ import {
   SEED_EMAIL,
   SEED_PASSWORD,
   getTestWebState,
-  resetTestWeb
+  resetTestWeb,
+  step
 } from "../helpers/app-client";
 
 /**
@@ -97,6 +98,40 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
       (await getTestWebState()).orders,
       "the order must not be placed while recording"
     ).toHaveLength(0);
+
+    await page.getByTestId("close-session").click();
+  });
+
+  test("changing the start URL does not throw away unsaved steps", async ({ page }) => {
+    // Steps that are not saved yet exist only in the editor. Starting the browser
+    // after changing the start URL reloaded the workflow to pick up the new URL,
+    // and the reload replaced the step list with whatever the server had — the
+    // recording of the last ten minutes, gone without a word.
+    await loginThroughUi(page);
+
+    const workflow = await client.createWorkflow(
+      `URL iniziale ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` })
+    ]);
+
+    await page.goto(`/workflows/${workflow.id}`);
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(1);
+
+    // An unsaved step, the cheapest stand-in for a recording in progress.
+    await page.getByTestId("add-wait").click();
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(2);
+
+    await page.getByTestId("start-url").fill(`${TEST_WEB_INTERNAL_URL}/checkout`);
+    await page.getByTestId("start-browser").click();
+    await expect(page.getByTestId("session-state")).toContainText("ready", { timeout: 90_000 });
+
+    await expect(
+      page.getByTestId("step-list").locator("li"),
+      "the unsaved step must survive"
+    ).toHaveCount(2);
 
     await page.getByTestId("close-session").click();
   });

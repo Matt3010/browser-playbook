@@ -72,10 +72,6 @@ export type StepVerification =
 /** Kept short so recording stays responsive while the user is working. */
 const VERIFY_TIMEOUT_MS = 1500;
 
-/** Milliseconds after an interaction during which a navigation is considered
- *  a consequence of that interaction, and therefore not recorded separately. */
-const NAVIGATION_DEBOUNCE_MS = 1500;
-
 export class BrowserSession {
   readonly sessionId: string;
   readonly userId: string;
@@ -101,7 +97,6 @@ export class BrowserSession {
   private readonly actions: RecordedAction[] = [];
   /** Verification of each recorded action, by its index in `actions`. */
   private readonly verifications = new Map<number, StepVerification>();
-  private lastActionAt = 0;
   private timeoutTimer: NodeJS.Timeout | null = null;
   private closing = false;
   private lastTouchedAt = Date.now();
@@ -313,14 +308,41 @@ export class BrowserSession {
     this.pages.push({ pageId, page });
     this.activePageId = pageId;
 
+    /**
+     * Whether the navigation now in flight is one the user asked the browser
+     * for, rather than one the page started.
+     *
+     * A navigation the document caused — a link, a form, `location.href` —
+     * carries a referer; one typed into the address bar, or driven by the Vai
+     * button, does not. That is a question about cause, and it used to be
+     * answered with a stopwatch: a navigation arriving more than 1.5 s after the
+     * last action counted as a separate goto. On a site that answers slowly —
+     * which is most of them — every transition arrives later than that, so each
+     * one was recorded twice, the click and then a goto to where the click had
+     * already gone. In the other direction, an address typed straight after a
+     * click was swallowed as if that click had caused it.
+     */
+    let userAskedForIt = false;
+
+    page.on("request", (request) => {
+      if (!request.isNavigationRequest()) return;
+      if (request.frame() !== page.mainFrame()) return;
+      // A redirect keeps the classification of the request that started the chain.
+      if (request.redirectedFrom()) return;
+      userAskedForIt = !request.headers()["referer"];
+    });
+
     page.on("framenavigated", (frame) => {
       if (frame !== page.mainFrame()) return;
+      // Consumed either way: the next navigation must be classified on its own,
+      // and client-side routing produces no request at all — whatever the page
+      // did, it did because of an action that is already recorded.
+      const asked = userAskedForIt;
+      userAskedForIt = false;
       if (!this.recording) return;
       const url = frame.url();
       if (!url || url === "about:blank") return;
-      // A navigation right after a click/submit is the consequence of that
-      // action, so recording a separate goto would duplicate the step.
-      if (Date.now() - this.lastActionAt < NAVIGATION_DEBOUNCE_MS) return;
+      if (!asked) return;
       this.pushAction({ kind: "navigate", url, pageId, timestamp: Date.now() });
     });
 
@@ -464,7 +486,6 @@ export class BrowserSession {
   private pushAction(action: RecordedAction, page?: Page): void {
     this.actions.push(action);
     const index = this.actions.length - 1;
-    this.lastActionAt = Date.now();
 
     if (page && action.element) {
       void this.verifyAction(index, action, page);
