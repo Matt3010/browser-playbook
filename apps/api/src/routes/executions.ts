@@ -3,6 +3,7 @@ import { stat } from "fs/promises";
 import path from "path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
+import { signSessionToken } from "@app/shared";
 import { isRunnableStepList, StepSchema } from "@app/workflow-schema";
 import { requireAuth, currentUser } from "../auth";
 import { referenceState, unresolvedReferences } from "../references";
@@ -193,6 +194,42 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
       take: parsed.data.limit,
       include: { workflow: { select: { id: true, name: true } } }
     });
+  });
+
+  /**
+   * A ticket to watch the browser of a run that is happening right now.
+   *
+   * The runner drives a session whose id *is* the execution's, so the stream
+   * has always existed — there was simply no way to ask for it: a VNC token is
+   * minted when a session is created from the page, and nobody creates this
+   * one. Everything the stream needs to be safe is already checked on the
+   * upgrade: scope, session, owner and state.
+   */
+  app.get<{ Params: { id: string } }>("/executions/:id/vnc", async (request, reply) => {
+    const { userId } = currentUser(request);
+    const execution = await loadOwnedExecution(app, userId, request.params.id);
+
+    let live: { userId: string; state: string };
+    try {
+      live = await app.worker.getSession(execution.id);
+    } catch {
+      return reply.code(404).send({ error: "This execution has no live browser" });
+    }
+    // Only once it is actually up: a session exists from the moment it is asked
+    // for, but Xvfb, x11vnc and websockify take a few seconds to come up behind
+    // it, and a ticket handed out before that buys a refused connection.
+    if (live.userId !== userId || (live.state !== "ready" && live.state !== "running")) {
+      return reply.code(404).send({ error: "This execution has no live browser" });
+    }
+
+    const token = signSessionToken(
+      { sessionId: execution.id, userId, scope: "vnc" },
+      app.config.jwtSecret,
+      app.config.sessionTokenTtlSeconds
+    );
+    return {
+      vncPath: `/api/sessions/${execution.id}/vnc?token=${encodeURIComponent(token)}`
+    };
   });
 
   app.get<{ Params: { id: string } }>("/executions/:id", async (request) => {

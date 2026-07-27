@@ -271,6 +271,17 @@ These are the classes of defect this codebase actually produced, so look here fi
   attempt against the real site. The list shows what a reference holds, `(vuota)`
   when it holds nothing, dots for a secret; `hasValue` had to be fixed while doing
   it, because it read the length of the *ciphertext* and encrypting "" is not empty.
+- **A stop that does not wait is a workflow cut in half.** Docker sends SIGTERM
+  and kills ten seconds later by default. The worker answers SIGTERM by letting
+  the running job finish — but ten seconds is not a run, so a deploy during an
+  execution killed the browser mid-step and the user was shown a raw
+  "Target page, context or browser has been closed", with the site already acted
+  on halfway. `stop_grace_period: 180s`, asserted on both compose files.
+- **A session exists before it is up.** The ticket to watch a running execution
+  was handed out as soon as the worker knew about the session, which is a few
+  seconds before Xvfb, x11vnc and websockify are listening: the stream then
+  opened onto a refused connection. It is granted only for a session that is
+  `ready` or `running`, and the page keeps asking until then.
 - **Write-only is not read-only.** The values page could create and delete but
   never change anything, so correcting a typo in a variable meant deleting it and
   typing the name again — and every workflow referencing it was refused in

@@ -378,3 +378,130 @@ describe("editing a workflow that is about to run", () => {
     expect(response.statusCode).toBe(200);
   });
 });
+
+describe("cloning a workflow", () => {
+  async function withSteps(name: string) {
+    const workflow = await createWorkflow(ctx.app, user.cookie, name);
+    await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: {
+        steps: [
+          gotoStep("http://test-web:3001/checkout"),
+          {
+            id: stepId(),
+            type: "fill",
+            name: "Inserisci la nota",
+            pageId: "main",
+            selector: {
+              strategy: "id",
+              value: "order-note",
+              fallback: null,
+              pageId: "main",
+              frame: null
+            },
+            value: "{{variables.nota}}",
+            timeoutMs: 10000,
+            enabled: true
+          },
+          {
+            id: stepId(),
+            type: "click",
+            name: "Clicca Acquista ora",
+            pageId: "main",
+            selector: {
+              strategy: "id",
+              value: "place-order",
+              fallback: null,
+              pageId: "main",
+              frame: null
+            },
+            value: null,
+            timeoutMs: 10000,
+            enabled: true,
+            isFinal: true
+          }
+        ]
+      }
+    });
+    return workflow;
+  }
+
+  it("copies the steps into a new workflow of its own", async () => {
+    const original = await withSteps("Ordine mensile");
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${original.id}/clone`,
+      headers: { cookie: user.cookie }
+    });
+
+    expect(response.statusCode).toBe(201);
+    const clone = response.json();
+    expect(clone.id).not.toBe(original.id);
+    expect(clone.name).toBe("Ordine mensile (copia)");
+    expect(clone.startUrl).toBe(original.startUrl);
+
+    const [before, after] = await Promise.all([
+      ctx.prisma.workflowStep.findMany({
+        where: { workflowId: original.id },
+        orderBy: { position: "asc" }
+      }),
+      ctx.prisma.workflowStep.findMany({
+        where: { workflowId: clone.id },
+        orderBy: { position: "asc" }
+      })
+    ]);
+
+    expect(after).toHaveLength(before.length);
+    expect(after.map((s) => s.name)).toEqual(before.map((s) => s.name));
+    expect(after.map((s) => s.valueTemplate)).toEqual(before.map((s) => s.valueTemplate));
+    expect(after[2].isFinal, "the closing action stays a closing action").toBe(true);
+
+    // Ids are identity, not content: two workflows may not share a step row.
+    for (const step of after) {
+      expect(before.map((s) => s.id)).not.toContain(step.id);
+    }
+  });
+
+  it("does not copy the history or the schedules of the original", async () => {
+    const original = await withSteps("Con storia");
+    await ctx.prisma.execution.create({
+      data: { workflowId: original.id, status: "completed" }
+    });
+
+    const clone = (
+      await ctx.app.inject({
+        method: "POST",
+        url: `/api/workflows/${original.id}/clone`,
+        headers: { cookie: user.cookie }
+      })
+    ).json();
+
+    expect(await ctx.prisma.execution.count({ where: { workflowId: clone.id } })).toBe(0);
+    expect(await ctx.prisma.schedule.count({ where: { workflowId: clone.id } })).toBe(0);
+  });
+
+  it("refuses to clone a workflow of another user", async () => {
+    const original = await withSteps("Non tua");
+    const other = await registerUser(ctx.app, `altro-${Date.now()}@example.com`);
+
+    // The owner can, so a 404 for the other user is a refusal and not a route
+    // that simply does not exist.
+    const mine = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${original.id}/clone`,
+      headers: { cookie: user.cookie }
+    });
+    expect(mine.statusCode).toBe(201);
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${original.id}/clone`,
+      headers: { cookie: other.cookie }
+    });
+    expect(response.statusCode).toBe(404);
+    expect(await ctx.prisma.workflow.count({ where: { userId: other.id } })).toBe(0);
+  });
+});

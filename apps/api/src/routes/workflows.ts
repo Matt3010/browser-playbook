@@ -120,6 +120,50 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
     return app.prisma.workflow.update({ where: { id: workflow.id }, data: parsed.data });
   });
 
+  /**
+   * Copies a workflow into one of its own: same start URL, same steps in the
+   * same order, nothing else. A workflow is written once and then varied — the
+   * same order for another supplier, the same login for another environment —
+   * and without this the only way to vary one was to record it again.
+   *
+   * The history and the schedules stay with the original: they describe what
+   * that workflow did and when it is due, not what it is. The steps get new
+   * ids, because an id is identity and two workflows cannot share a row.
+   */
+  app.post<{ Params: { id: string } }>("/:id/clone", async (request, reply) => {
+    const { userId } = currentUser(request);
+    const workflow = await loadOwnedWorkflow(app, userId, request.params.id);
+    const steps = await app.prisma.workflowStep.findMany({
+      where: { workflowId: workflow.id },
+      orderBy: { position: "asc" }
+    });
+
+    const clone = await app.prisma.workflow.create({
+      data: {
+        userId,
+        name: `${workflow.name} (copia)`.slice(0, 200),
+        startUrl: workflow.startUrl,
+        status: workflow.status,
+        steps: {
+          create: steps.map((step) => ({
+            position: step.position,
+            type: step.type,
+            name: step.name,
+            pageId: step.pageId,
+            pageOrigin: step.pageOrigin,
+            selectorJson: (step.selectorJson ?? null) as never,
+            valueTemplate: step.valueTemplate,
+            timeoutMs: step.timeoutMs,
+            enabled: step.enabled,
+            isFinal: step.isFinal
+          }))
+        }
+      }
+    });
+
+    return reply.code(201).send(clone);
+  });
+
   app.delete<{ Params: { id: string } }>("/:id", async (request, reply) => {
     const { userId } = currentUser(request);
     const workflow = await loadOwnedWorkflow(app, userId, request.params.id);

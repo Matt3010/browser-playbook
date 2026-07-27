@@ -110,6 +110,31 @@ test.describe("visual step editor", () => {
     await expect(page.getByTestId("workflow-name")).toHaveText(renamed);
   });
 
+  test("duplicates a workflow with its steps", async ({ page }) => {
+    // A workflow is written once and then varied — the same order for another
+    // supplier, the same login for another environment. Without this the only
+    // way to vary one was to record it again from scratch.
+    const original = `Da duplicare ${Date.now()}`;
+    await page.getByTestId("rename-workflow").click();
+    await page.getByTestId("workflow-name-input").fill(original);
+    await page.getByTestId("rename-save").click();
+    await expect(page.getByTestId("workflow-name")).toHaveText(original);
+
+    await page.goto("/workflows");
+    await page.getByTestId(`workflow-clone-${original}`).click();
+
+    const copy = `${original} (copia)`;
+    await expect(page.getByTestId(`workflow-link-${copy}`)).toBeVisible();
+
+    // The copy carries the steps, and the original is untouched.
+    await page.getByTestId(`workflow-link-${copy}`).click();
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(3);
+    await expect(page.getByTestId("step-name-1")).toHaveText("Inserisci Nome");
+
+    const stored = await client.getWorkflow(workflowId);
+    expect(stored.name, "the original keeps its name").toBe(original);
+  });
+
   test("shows what a referenced value holds, not the reference", async ({ page }) => {
     // `{{variables.repoName}}` says nothing about whether the run will type
     // something or nothing at all, which is the only thing worth seeing at a

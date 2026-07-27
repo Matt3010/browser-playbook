@@ -219,6 +219,38 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
     await page.getByTestId("close-session").click();
   });
 
+  test("shows the browser of a run while it is running", async ({ page }) => {
+    // The run drives a browser of its own and nobody could look at it: a
+    // workflow that stops on an unexpected page could only be read about
+    // afterwards, from the logs.
+    await loginThroughUi(page);
+    const workflow = await client.createWorkflow(
+      `Da guardare ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` }),
+      // Long enough to still be running when the page asks for the stream.
+      step({ type: "wait", name: "Attendi", value: "15000" }),
+      step({
+        type: "click",
+        name: "Clicca il bottone",
+        selector: { strategy: "id", value: "real-button", fallback: null, pageId: "main", frame: null }
+      })
+    ]);
+
+    const started = await client.runNow(workflow.id);
+    await page.goto(`/executions/${started.id}`);
+
+    await expect(page.getByTestId("execution-stream")).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByTestId("vnc-connected")).toBeAttached({ timeout: 60_000 });
+
+    // And it goes away with the run: there is nothing left to watch.
+    const finished = await client.waitForExecution(started.id);
+    expect(finished.status).toBe("completed");
+    await expect(page.getByTestId("execution-stream")).toBeHidden({ timeout: 30_000 });
+  });
+
   test("running straight after recording stores the secret the steps reference", async ({
     page
   }) => {

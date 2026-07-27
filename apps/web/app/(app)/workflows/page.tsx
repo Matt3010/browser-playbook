@@ -13,6 +13,7 @@ const STATUS_STYLE: Record<string, string> = {
 export default function WorkflowsPage() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
 
   async function load() {
     const data = await api.get<Workflow[]>("/workflows");
@@ -27,6 +28,20 @@ export default function WorkflowsPage() {
   async function remove(id: string) {
     await api.del(`/workflows/${id}`);
     await load();
+  }
+
+  /**
+   * Copies a workflow. The steps come with it, the history and the schedules
+   * stay with the original: a copy is a starting point, not a past.
+   */
+  async function clone(id: string) {
+    setBusy(id);
+    try {
+      await api.post(`/workflows/${id}/clone`);
+      await load();
+    } finally {
+      setBusy(null);
+    }
   }
 
   return (
@@ -47,7 +62,11 @@ export default function WorkflowsPage() {
       ) : (
         <ul className="space-y-2" data-testid="workflow-list">
           {workflows.map((workflow) => (
-            <li key={workflow.id} className="card flex items-center gap-4">
+            <li
+              key={workflow.id}
+              className="card flex flex-wrap items-center gap-4"
+              data-testid={`workflow-row-${workflow.name}`}
+            >
               <div className="flex-1">
                 <Link
                   href={`/workflows/${workflow.id}`}
@@ -62,6 +81,14 @@ export default function WorkflowsPage() {
               <span className={`badge ${STATUS_STYLE[workflow.status]}`} data-testid="workflow-status">
                 {workflow.status}
               </span>
+              <button
+                className="btn-secondary"
+                onClick={() => void clone(workflow.id)}
+                disabled={busy !== null}
+                data-testid={`workflow-clone-${workflow.name}`}
+              >
+                {busy === workflow.id ? "Copia..." : "Duplica"}
+              </button>
               <button className="btn-danger" onClick={() => void remove(workflow.id)}>
                 Elimina
               </button>

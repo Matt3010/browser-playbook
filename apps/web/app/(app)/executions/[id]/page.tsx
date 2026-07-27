@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { api, ApiError, type Execution, type ExecutionLog } from "@/lib/api";
+import { VncViewer } from "@/components/VncViewer";
 
 const STATUS_STYLE: Record<string, string> = {
   queued: "bg-slate-100 text-slate-700",
@@ -21,6 +22,8 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
   const [cancelError, setCancelError] = useState<string | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const seen = useRef(new Set<string>());
+  /** The live stream of the browser this run is driving, while it is running. */
+  const [vncPath, setVncPath] = useState<string | null>(null);
 
   // Initial snapshot, including logs already stored.
   useEffect(() => {
@@ -33,6 +36,35 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
       })
       .catch(() => undefined);
   }, [executionId]);
+
+  /*
+   * The run drives a browser of its own, and until now nobody could look at it:
+   * a workflow that stops on an unexpected page could only be read about
+   * afterwards. The stream exists for as long as the run does, so it is asked
+   * for until it answers and dropped as soon as the run ends.
+   */
+  useEffect(() => {
+    if (!execution || TERMINAL.includes(execution.status)) {
+      setVncPath(null);
+      return;
+    }
+    if (vncPath) return;
+    let cancelled = false;
+    const ask = () =>
+      api
+        .get<{ vncPath: string }>(`/executions/${executionId}/vnc`)
+        .then((ticket) => {
+          if (!cancelled) setVncPath(ticket.vncPath);
+        })
+        // Not there yet: the browser takes a few seconds to open.
+        .catch(() => undefined);
+    void ask();
+    const timer = setInterval(ask, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [execution, executionId, vncPath]);
 
   // Live updates over Server-Sent Events until the execution is terminal.
   useEffect(() => {
@@ -172,6 +204,17 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
                 .join("\n")}
         </pre>
       </section>
+
+      {vncPath ? (
+        <section className="card overflow-hidden p-0" data-testid="execution-stream">
+          <h2 className="border-b border-slate-200 p-2 text-sm font-medium">
+            Browser dell&apos;esecuzione, in diretta
+          </h2>
+          <div className="aspect-[16/10] max-h-[70vh]">
+            <VncViewer path={vncPath} />
+          </div>
+        </section>
+      ) : null}
 
       {screenshots.length > 0 ? (
         <section className="card">

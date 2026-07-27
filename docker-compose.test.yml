@@ -116,6 +116,11 @@ services:
     # reaps what it spawned itself. Without an init process they pile up as zombies,
     # a few per session, until the process table is exhausted.
     init: true
+    # Docker kills ten seconds after SIGTERM by default, and a workflow is not
+    # ten seconds: a deploy during a run killed the browser mid-step, on a site
+    # that had already been acted on halfway. The worker answers SIGTERM by
+    # letting the running job finish, so it is given the time to do it.
+    stop_grace_period: 180s
     environment:
       NODE_ENV: production
       WORKER_PORT: 5000

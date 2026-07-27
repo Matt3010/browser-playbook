@@ -34,6 +34,39 @@ function composeServices(): ComposeService[] {
     .map((line) => JSON.parse(line) as ComposeService);
 }
 
+/**
+ * A stop that does not wait is a workflow cut in half.
+ *
+ * Docker sends SIGTERM and kills after ten seconds by default. The worker
+ * answers SIGTERM by letting the running job finish, but ten seconds is not a
+ * run: a deploy during an execution killed the browser mid-step and the user was
+ * shown a raw "Target page, context or browser has been closed". The site had
+ * already been acted on halfway.
+ */
+test.describe("stopping the worker", () => {
+  for (const file of ["docker-compose.yml", "docker-compose.test.yml"]) {
+    test(`${file} gives the worker time to finish a run before killing it`, async () => {
+      const raw = execFileSync(
+        "docker",
+        ["compose", "-f", file, "config", "--format", "json"],
+        { encoding: "utf8", cwd: process.cwd().replace(/[\/]e2e$/, "") }
+      );
+      const config = JSON.parse(raw) as {
+        services: Record<string, { stop_grace_period?: string }>;
+      };
+      const grace = config.services.worker?.stop_grace_period;
+      expect(grace, "the worker must declare a stop grace period").toBeTruthy();
+      // Compose normalises the duration, so "180s" comes back as "3m0s".
+      const seconds = [...String(grace).matchAll(/(\d+)([hms])/g)].reduce(
+        (total, [, amount, unit]) =>
+          total + Number(amount) * (unit === "h" ? 3600 : unit === "m" ? 60 : 1),
+        0
+      );
+      expect(seconds, "ten seconds is not enough to finish a workflow").toBeGreaterThanOrEqual(120);
+    });
+  }
+});
+
 test.describe("stack health", () => {
   test("the reverse proxy serves the API health endpoint", async () => {
     const response = await fetch(`${APP_BASE_URL}/health`);
