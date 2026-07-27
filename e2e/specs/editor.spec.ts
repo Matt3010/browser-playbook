@@ -17,12 +17,20 @@ async function loginThroughUi(page: Page): Promise<void> {
 }
 
 /**
- * Clicks Save and waits for the confirmation in the live log, so assertions on
- * the persisted state cannot race the request.
+ * Clicks Save and waits for *this* save to land, so assertions on the persisted
+ * state cannot race the request. The confirmation in the live log is the wrong
+ * thing to wait for when a test saves twice: the line from the first save is
+ * already there and the wait returns at once. The unsaved-changes flag belongs
+ * to the save in front of us.
  */
 async function save(page: Page): Promise<void> {
+  // The step form is a modal: it covers the toolbar and has to be closed first,
+  // exactly as the user has to close it.
+  const done = page.getByTestId("step-form-close");
+  if (await done.isVisible().catch(() => false)) await done.click();
+  await expect(page.getByTestId("unsaved-changes")).toBeVisible();
   await page.getByTestId("save-steps").click();
-  await expect(page.getByTestId("live-log")).toContainText("step salvati", { timeout: 30_000 });
+  await expect(page.getByTestId("unsaved-changes")).toBeHidden({ timeout: 30_000 });
 }
 
 function baseSteps() {
@@ -161,6 +169,45 @@ test.describe("visual step editor", () => {
     await save(page);
     const stored = await client.getWorkflow(workflowId);
     expect(stored.steps).toHaveLength(2);
+  });
+
+  test("edits a step in a modal that can be dismissed", async ({ page }) => {
+    // The form used to unfold inside the row, pushing the rest of the list down
+    // and leaving the fields to compete with it for width.
+    await page.getByTestId("step-edit-1").click();
+    const form = page.getByTestId("step-form-1");
+    await expect(form).toBeVisible();
+    await expect(form).toHaveAttribute("role", "dialog");
+
+    await page.keyboard.press("Escape");
+    await expect(form).toBeHidden();
+  });
+
+  test("disables a step and everything after it", async ({ page }) => {
+    // A step depends on what the steps before it did, so switching one off often
+    // means switching off the rest. Asking for that explicitly keeps the plain
+    // toggle free of surprises.
+    await page.getByTestId("step-disable-from-1").click();
+    await expect(page.getByTestId("step-toggle-0")).toHaveText("Disabilita");
+    await expect(page.getByTestId("step-toggle-1")).toHaveText("Abilita");
+    await expect(page.getByTestId("step-toggle-2")).toHaveText("Abilita");
+
+    await save(page);
+    expect((await client.getWorkflow(workflowId)).steps.map((s) => s.enabled)).toEqual([
+      true,
+      false,
+      false
+    ]);
+
+    // And the same command brings the tail back.
+    await page.getByTestId("step-disable-from-1").click();
+    await expect(page.getByTestId("step-toggle-2")).toHaveText("Disabilita");
+    await save(page);
+    expect((await client.getWorkflow(workflowId)).steps.map((s) => s.enabled)).toEqual([
+      true,
+      true,
+      true
+    ]);
   });
 
   test("disables a step without deleting it", async ({ page }) => {

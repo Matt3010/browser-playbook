@@ -89,6 +89,11 @@ const VERIFICATION_LABEL: Record<string, { text: string; className: string }> = 
 export function StepEditor({ steps, onChange, verifications = [] }: StepEditorProps) {
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Resolved from the list rather than kept as a copy: the modal edits the step
+  // in place, so it has to read what the list holds now.
+  const editingIndex = steps.findIndex((step) => step.id === editingId);
+  const editing = editingIndex >= 0 ? steps[editingIndex] : null;
+
   function update(id: string, patch: Partial<Step>) {
     onChange(steps.map((step) => (step.id === id ? { ...step, ...patch } : step)));
   }
@@ -120,6 +125,17 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
 
   function remove(id: string) {
     onChange(steps.filter((step) => step.id !== id));
+  }
+
+  /**
+   * Switches a step and everything after it. A step depends on what the ones
+   * before it did, so switching one off usually means switching off the rest —
+   * but doing that behind the plain toggle would be a surprise, and re-enabling
+   * could not know what to bring back. It is its own command instead.
+   */
+  function toggleFrom(index: number) {
+    const enabled = !steps[index]?.enabled;
+    onChange(steps.map((step, i) => (i >= index ? { ...step, enabled } : step)));
   }
 
   function addWait() {
@@ -258,10 +274,10 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
                   <div className="flex gap-1">
                     <button
                       className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
-                      onClick={() => setEditingId(editingId === step.id ? null : step.id)}
+                      onClick={() => setEditingId(step.id)}
                       data-testid={`step-edit-${index}`}
                     >
-                      {editingId === step.id ? "Chiudi" : "Modifica"}
+                      Modifica
                     </button>
                     <button
                       className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
@@ -269,6 +285,18 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
                       data-testid={`step-toggle-${index}`}
                     >
                       {step.enabled ? "Disabilita" : "Abilita"}
+                    </button>
+                    <button
+                      className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
+                      onClick={() => toggleFrom(index)}
+                      title={
+                        step.enabled
+                          ? "Disabilita questo step e tutti quelli dopo"
+                          : "Riabilita questo step e tutti quelli dopo"
+                      }
+                      data-testid={`step-disable-from-${index}`}
+                    >
+                      {step.enabled ? "Disabilita da qui" : "Abilita da qui"}
                     </button>
                     <button
                       className="rounded border border-red-200 px-1.5 text-xs text-red-700 hover:bg-red-50"
@@ -281,143 +309,179 @@ export function StepEditor({ steps, onChange, verifications = [] }: StepEditorPr
                 </div>
               </div>
 
-              {editingId === step.id ? (
-                <div className="mt-2 space-y-2 rounded-md bg-slate-50 p-2" data-testid={`step-form-${index}`}>
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block">
-                      <span className="text-xs text-slate-600">Nome</span>
-                      <input
-                        className="input"
-                        value={step.name}
-                        onChange={(e) => update(step.id, { name: e.target.value })}
-                        data-testid={`step-name-input-${index}`}
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-xs text-slate-600">Tipo</span>
-                      <select
-                        className="input"
-                        value={step.type}
-                        onChange={(e) => update(step.id, { type: e.target.value })}
-                      >
-                        {STEP_TYPES.map((type) => (
-                          <option key={type} value={type}>
-                            {type}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <label className="block">
-                      <span className="text-xs text-slate-600">Valore</span>
-                      <input
-                        className="input"
-                        value={step.value ?? ""}
-                        onChange={(e) => update(step.id, { value: e.target.value })}
-                        placeholder="{{credentials.password}}"
-                        data-testid={`step-value-input-${index}`}
-                      />
-                    </label>
-                    <label className="block">
-                      <span className="text-xs text-slate-600">Timeout (ms)</span>
-                      <input
-                        className="input"
-                        type="number"
-                        value={step.timeoutMs}
-                        onChange={(e) => update(step.id, { timeoutMs: Number(e.target.value) })}
-                      />
-                    </label>
-                  </div>
-
-                  {step.selector ? (
-                    <div className="grid grid-cols-2 gap-2">
-                      <label className="block">
-                        <span className="text-xs text-slate-600">Strategia selector</span>
-                        <select
-                          className="input"
-                          value={step.selector.strategy}
-                          onChange={(e) => updateSelector(step.id, { strategy: e.target.value })}
-                          data-testid={`step-strategy-${index}`}
-                        >
-                          {SELECTOR_STRATEGIES.map((strategy) => (
-                            <option key={strategy} value={strategy}>
-                              {strategy}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      {step.selector.strategy === "role" ? (
-                        <>
-                          <label className="block">
-                            <span className="text-xs text-slate-600">Role</span>
-                            <input
-                              className="input"
-                              value={step.selector.role ?? ""}
-                              onChange={(e) => updateSelector(step.id, { role: e.target.value })}
-                            />
-                          </label>
-                          <label className="block">
-                            <span className="text-xs text-slate-600">Name accessibile</span>
-                            <input
-                              className="input"
-                              value={step.selector.name ?? ""}
-                              onChange={(e) => updateSelector(step.id, { name: e.target.value })}
-                            />
-                          </label>
-                        </>
-                      ) : (
-                        <label className="block">
-                          <span className="text-xs text-slate-600">Valore selector</span>
-                          <input
-                            className="input"
-                            value={step.selector.value ?? ""}
-                            onChange={(e) => updateSelector(step.id, { value: e.target.value })}
-                            data-testid={`step-selector-value-${index}`}
-                          />
-                        </label>
-                      )}
-                      <label className="block">
-                        <span className="text-xs text-slate-600">Fallback CSS/XPath</span>
-                        <input
-                          className="input"
-                          value={step.selector.fallback ?? ""}
-                          onChange={(e) =>
-                            updateSelector(step.id, { fallback: e.target.value || null })
-                          }
-                        />
-                      </label>
-                      <label className="block">
-                        <span className="text-xs text-slate-600">Pagina / tab</span>
-                        <input
-                          className="input"
-                          value={step.pageId}
-                          onChange={(e) =>
-                            onChange(
-                              steps.map((s) =>
-                                s.id === step.id
-                                  ? {
-                                      ...s,
-                                      pageId: e.target.value,
-                                      selector: s.selector
-                                        ? { ...s.selector, pageId: e.target.value }
-                                        : null
-                                    }
-                                  : s
-                              )
-                            )
-                          }
-                        />
-                      </label>
-                    </div>
-                  ) : null}
-                </div>
-              ) : null}
             </li>
           ))}
         </ol>
       )}
+
+      {editing ? (
+        // A modal rather than an unfolding row: the form used to push the rest of
+        // the list down and compete with it for width, in a panel that is already
+        // the narrow half of the page.
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setEditingId(null);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Modifica step ${editingIndex + 1}`}
+            className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-lg bg-white p-4 shadow-xl"
+            data-testid={`step-form-${editingIndex}`}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setEditingId(null);
+            }}
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <span className="badge bg-slate-100 text-slate-700">{editing.type}</span>
+              <h2 className="font-medium">Step {editingIndex + 1}</h2>
+              <div className="flex-1" />
+              <button
+                className="btn"
+                onClick={() => setEditingId(null)}
+                data-testid="step-form-close"
+              >
+                Fatto
+              </button>
+            </div>
+
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="text-xs text-slate-600">Nome</span>
+                  <input
+                    className="input"
+                    value={editing.name}
+                    autoFocus
+                    onChange={(e) => update(editing.id, { name: e.target.value })}
+                    data-testid={`step-name-input-${editingIndex}`}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs text-slate-600">Tipo</span>
+                  <select
+                    className="input"
+                    value={editing.type}
+                    onChange={(e) => update(editing.id, { type: e.target.value })}
+                  >
+                    {STEP_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {type}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <label className="block">
+                  <span className="text-xs text-slate-600">Valore</span>
+                  <input
+                    className="input"
+                    value={editing.value ?? ""}
+                    onChange={(e) => update(editing.id, { value: e.target.value })}
+                    placeholder="{{credentials.password}}"
+                    data-testid={`step-value-input-${editingIndex}`}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs text-slate-600">Timeout (ms)</span>
+                  <input
+                    className="input"
+                    type="number"
+                    value={editing.timeoutMs}
+                    onChange={(e) => update(editing.id, { timeoutMs: Number(e.target.value) })}
+                  />
+                </label>
+              </div>
+
+              {editing.selector ? (
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <span className="text-xs text-slate-600">Strategia selector</span>
+                    <select
+                      className="input"
+                      value={editing.selector.strategy}
+                      onChange={(e) => updateSelector(editing.id, { strategy: e.target.value })}
+                      data-testid={`step-strategy-${editingIndex}`}
+                    >
+                      {SELECTOR_STRATEGIES.map((strategy) => (
+                        <option key={strategy} value={strategy}>
+                          {strategy}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  {editing.selector.strategy === "role" ? (
+                    <>
+                      <label className="block">
+                        <span className="text-xs text-slate-600">Role</span>
+                        <input
+                          className="input"
+                          value={editing.selector.role ?? ""}
+                          onChange={(e) => updateSelector(editing.id, { role: e.target.value })}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="text-xs text-slate-600">Name accessibile</span>
+                        <input
+                          className="input"
+                          value={editing.selector.name ?? ""}
+                          onChange={(e) => updateSelector(editing.id, { name: e.target.value })}
+                        />
+                      </label>
+                    </>
+                  ) : (
+                    <label className="block">
+                      <span className="text-xs text-slate-600">Valore selector</span>
+                      <input
+                        className="input"
+                        value={editing.selector.value ?? ""}
+                        onChange={(e) => updateSelector(editing.id, { value: e.target.value })}
+                        data-testid={`step-selector-value-${editingIndex}`}
+                      />
+                    </label>
+                  )}
+                  <label className="block">
+                    <span className="text-xs text-slate-600">Fallback CSS/XPath</span>
+                    <input
+                      className="input"
+                      value={editing.selector.fallback ?? ""}
+                      onChange={(e) =>
+                        updateSelector(editing.id, { fallback: e.target.value || null })
+                      }
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs text-slate-600">Pagina / tab</span>
+                    <input
+                      className="input"
+                      value={editing.pageId}
+                      onChange={(e) =>
+                        onChange(
+                          steps.map((s) =>
+                            s.id === editing.id
+                              ? {
+                                  ...s,
+                                  pageId: e.target.value,
+                                  selector: s.selector
+                                    ? { ...s.selector, pageId: e.target.value }
+                                    : null
+                                }
+                              : s
+                          )
+                        )
+                      }
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

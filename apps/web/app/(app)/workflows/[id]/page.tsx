@@ -274,6 +274,17 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     });
   }
 
+  /** The description panel that follows the pointer inside the stream. */
+  async function toggleTooltip() {
+    if (!session) return;
+    await run("tooltip", async () => {
+      const next = !session.tooltip;
+      await api.post(`/sessions/${session.sessionId}/tooltip`, { enabled: next });
+      setSession({ ...session, tooltip: next });
+      log(`Tooltip ${next ? "attivo" : "disattivo"}`);
+    });
+  }
+
   async function navigate() {
     if (!session) return;
     await run("navigate", async () => {
@@ -414,6 +425,13 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           {workflow.status}
         </span>
         <div className="flex-1" />
+        {/* What acts on the workflow, not on the remote browser. */}
+        <button className="btn" onClick={save} disabled={busy !== null} data-testid="save-steps">
+          {busy === "save" ? "Salvataggio..." : "Salva"}
+        </button>
+        <button className="btn" onClick={execute} disabled={busy !== null} data-testid="run-now">
+          {busy === "execute" ? "Avvio..." : "Esegui adesso"}
+        </button>
         <Link href={`/executions?workflowId=${workflowId}`} className="btn-secondary">
           Esecuzioni
         </Link>
@@ -438,8 +456,13 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
         </div>
       ) : null}
 
-      {/* toolbar */}
-      <div className="card flex flex-wrap items-center gap-2">
+      {/* browser + steps, stacked: the stream gets the full width, and its box
+          keeps the remote screen's 16:10 ratio so nothing is letterboxed. The
+          controls that drive the remote browser sit in a bar attached to it, so
+          they read as part of the stream rather than as workflow commands. */}
+      <div className="grid gap-3">
+      <div className="card overflow-hidden p-0" data-testid="browser-panel">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 p-2">
         <input
           className="input max-w-md flex-1"
           value={startUrl}
@@ -448,9 +471,14 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           aria-label="URL iniziale"
         />
         {!session ? (
-          <button className="btn" onClick={startBrowser} disabled={busy !== null} data-testid="start-browser">
-            {busy === "start" ? "Avvio..." : "Avvia browser"}
-          </button>
+          <>
+            <button className="btn" onClick={startBrowser} disabled={busy !== null} data-testid="start-browser">
+              {busy === "start" ? "Avvio..." : "Avvia browser"}
+            </button>
+            <span className="text-xs text-slate-500">
+              Avvia il browser per vedere lo stream noVNC.
+            </span>
+          </>
         ) : (
           <>
             <button className="btn-secondary" onClick={navigate} disabled={busy !== null} data-testid="navigate">
@@ -493,33 +521,29 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
             <button className="btn-secondary" onClick={toggleHighlight} disabled={busy !== null} data-testid="toggle-highlight">
               Evidenzia: {session.highlight ? "on" : "off"}
             </button>
+            <button
+              className="btn-secondary"
+              onClick={toggleTooltip}
+              disabled={busy !== null}
+              title="Il riquadro che descrive l'elemento sotto il puntatore, dentro lo stream"
+              data-testid="toggle-tooltip"
+            >
+              Tooltip: {session.tooltip ? "on" : "off"}
+            </button>
             <button className="btn-danger" onClick={closeSession} disabled={busy !== null} data-testid="close-session">
               Chiudi browser
             </button>
           </>
         )}
-        <button className="btn" onClick={save} disabled={busy !== null} data-testid="save-steps">
-          {busy === "save" ? "Salvataggio..." : "Salva"}
-        </button>
-        <button className="btn" onClick={execute} disabled={busy !== null} data-testid="run-now">
-          {busy === "execute" ? "Avvio..." : "Esegui adesso"}
-        </button>
       </div>
 
-      {/* browser + steps, stacked: the stream gets the full width, and its box
-          keeps the remote screen's 16:10 ratio so nothing is letterboxed. */}
-      <div className="grid gap-3">
-        <div
-          className="card aspect-[16/10] max-h-[78vh] overflow-hidden p-0"
-          data-testid="browser-panel"
-        >
-          {session?.vncPath ? (
+        {/* No stream, no box: an empty frame the height of the screen says
+            nothing that the hint in the bar does not say in one line. */}
+        {session?.vncPath ? (
+          <div className="aspect-[16/10] max-h-[78vh]">
             <VncViewer path={session.vncPath} onStatusChange={setVncStatus} />
-          ) : (
-            <p className="flex h-full items-center justify-center text-sm text-slate-500">
-              Avvia il browser per vedere lo stream noVNC.
-            </p>
-          )}
+          </div>
+        ) : null}
         </div>
 
         <div className="card h-[460px] overflow-hidden p-0">
@@ -546,7 +570,11 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           </span>
           <span data-testid="current-url">URL: {session?.currentUrl ?? "-"}</span>
           <span>Pagine: {(session?.pages ?? []).map((p) => p.pageId).join(", ") || "-"}</span>
-          {dirty ? <span className="text-amber-700">Modifiche non salvate</span> : null}
+          {dirty ? (
+            <span className="text-amber-700" data-testid="unsaved-changes">
+              Modifiche non salvate
+            </span>
+          ) : null}
         </div>
         <pre
           className="max-h-40 overflow-y-auto rounded bg-slate-900 p-2 text-xs text-slate-100"

@@ -121,6 +121,14 @@ export async function buildControlServer(
     return describe(session);
   });
 
+  app.post<{ Params: { id: string } }>("/sessions/:id/tooltip", async (request, reply) => {
+    const parsed = ToggleSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
+    const session = sessions.get(request.params.id);
+    await session.setTooltip(parsed.data.enabled);
+    return describe(session);
+  });
+
   app.post<{ Params: { id: string } }>("/sessions/:id/highlight", async (request, reply) => {
     const parsed = ToggleSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
@@ -214,6 +222,7 @@ function describe(session: {
   recording: boolean;
   highlight: boolean;
   armedFinal: boolean;
+  tooltip: boolean;
   currentUrl: string | null;
   error: string | null;
   expiresAt: Date;
@@ -228,6 +237,7 @@ function describe(session: {
     recording: session.recording,
     highlight: session.highlight,
     armedFinal: session.armedFinal,
+    tooltip: session.tooltip,
     currentUrl: session.currentUrl,
     pages: session.listPages(),
     error: session.error,

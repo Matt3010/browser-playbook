@@ -307,7 +307,22 @@ export async function runExecution(
     // execution decides where it ended up, then photograph it.
     const lastPage = session.getActivePage();
     if (lastPage) {
-      await settleAfterLastStep(lastPage);
+      await settleAfterLastStep({
+        waitForLoadState: (state, waitOptions) => lastPage.waitForLoadState(state, waitOptions),
+        // Address, document size and text: enough to notice a routing, a
+        // re-render or a label going from "in progress" to done, and cheap
+        // enough to ask for every quarter of a second. `textContent` rather
+        // than `innerText` on purpose — it costs no layout.
+        fingerprint: () =>
+          lastPage
+            .evaluate(
+              () =>
+                `${location.href}|${document.readyState}|` +
+                `${document.querySelectorAll("*").length}|` +
+                `${document.body ? document.body.textContent?.length ?? 0 : 0}`
+            )
+            .catch(() => null)
+      });
       await captureResult({
         prisma,
         page: lastPage,

@@ -103,6 +103,20 @@ test.describe("recorder overlay and element inspection", () => {
     expect(on.outlineColor).toBe(EXPECTED.input);
   });
 
+  test("the description panel is off until it is asked for", async () => {
+    // It is drawn inside the very page the user is working on, and it says what
+    // the "selected element" panel already says, so it starts out of the way —
+    // and it is its own switch, not a side effect of the highlight.
+    expect((await client.getSession(sessionId)).tooltip).toBe(false);
+
+    await client.setTooltip(sessionId, true);
+    expect((await client.getSession(sessionId)).tooltip).toBe(true);
+    expect((await client.getSession(sessionId)).highlight, "unchanged by it").toBe(true);
+
+    await client.setTooltip(sessionId, false);
+    expect((await client.getSession(sessionId)).tooltip).toBe(false);
+  });
+
   test("element inspection reports everything the tooltip shows", async () => {
     const input = await describe("#text-input");
     expect(input.tag).toBe("input");

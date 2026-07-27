@@ -9,6 +9,7 @@ export interface WorkerSessionInfo {
   startUrl: string;
   recording: boolean;
   highlight: boolean;
+  tooltip?: boolean;
   armedFinal?: boolean;
   currentUrl?: string | null;
   pages?: Array<{ pageId: string; url: string; active: boolean }>;
@@ -110,6 +111,10 @@ export class WorkerClient {
 
   setHighlight(sessionId: string, enabled: boolean): Promise<WorkerSessionInfo> {
     return this.call("POST", `/sessions/${sessionId}/highlight`, { enabled });
+  }
+
+  setTooltip(sessionId: string, enabled: boolean): Promise<WorkerSessionInfo> {
+    return this.call("POST", `/sessions/${sessionId}/tooltip`, { enabled });
   }
 
   getRecording(sessionId: string): Promise<WorkerRecording> {

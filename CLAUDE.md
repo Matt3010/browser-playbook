@@ -249,6 +249,15 @@ These are the classes of defect this codebase actually produced, so look here fi
   the unsaved steps away without a word. A response that already contains the new
   value is merged into the loaded workflow instead. Renaming, added at the same
   time, does the same. Before reloading anything, ask what else the reload owns.
+- **Quiet is not finished.** The first `settleAfterLastStep` waited for the
+  network to go idle, and photographed a page whose button still read
+  "Creating repository…": an application posts, gets its answer, and routes a
+  moment *later*, so there is a stretch where nothing is in flight and the page
+  is still on its way. A run is over when the page has stopped changing — same
+  address, same document, same text, for a quiet stretch — which is what a person
+  waits for. Bounded, and it gives up rather than failing a run that has already
+  succeeded. `apps/test-web` reproduces the gap on purpose: it routes 1.2 s after
+  the answer, and without that the e2e passed against the broken version.
 
 ### Things a test cannot pin down
 

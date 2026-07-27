@@ -717,12 +717,19 @@ ${confirmButton}
   // tells whether the runner is still there when the action lands.
   document.getElementById("checkout-form").addEventListener("submit", function (event) {
     event.preventDefault();
+    document.getElementById("place-order").textContent = "Invio in corso...";
     fetch("/checkout", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ note: document.getElementById("order-note").value })
     }).then(function () {
-      window.location.href = "/checkout/confirmed";
+      // The routing comes a moment after the answer, the way an application does
+      // it once the write has been accepted. That gap is why "the network is
+      // quiet" is the wrong question to stop on: it is quiet, and the page is
+      // still on its way somewhere.
+      setTimeout(function () {
+        window.location.href = "/checkout/confirmed";
+      }, 1200);
     });
   });
 </script>`

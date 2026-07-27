@@ -401,7 +401,15 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
 
   // ---- action reporting -------------------------------------------------
 
-  const state = { recording: false, highlight: false, armedFinal: false, lastEmitAt: 0 };
+  const state = {
+    recording: false,
+    highlight: false,
+    // The description panel is its own switch: the outlines help while choosing
+    // an element, the panel covers the page being worked on.
+    tooltip: false,
+    armedFinal: false,
+    lastEmitAt: 0
+  };
 
   /**
    * While armed, the next pointer interaction is swallowed: no page handler runs
@@ -584,7 +592,7 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
   document.addEventListener(
     "mouseover",
     (event) => {
-      if (!state.highlight) return;
+      if (!state.tooltip) return;
       const target = event.target as Element | null;
       if (!isInstrumented(target)) return;
       const mouse = event as MouseEvent;
@@ -597,12 +605,18 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
 
   // ---- control surface --------------------------------------------------
 
-  function apply(next: { recording: boolean; highlight: boolean; armedFinal?: boolean }): void {
+  function apply(next: {
+    recording: boolean;
+    highlight: boolean;
+    tooltip?: boolean;
+    armedFinal?: boolean;
+  }): void {
     state.recording = !!next.recording;
     state.highlight = !!next.highlight;
+    state.tooltip = !!next.tooltip;
     state.armedFinal = !!next.armedFinal;
     setHighlight(state.highlight);
-    if (!state.highlight) hideTooltip();
+    if (!state.tooltip) hideTooltip();
   }
 
   w.__recorderApply = apply;

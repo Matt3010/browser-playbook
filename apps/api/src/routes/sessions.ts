@@ -106,6 +106,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
           startUrl: info.startUrl,
           recording: info.recording,
           highlight: info.highlight,
+          tooltip: info.tooltip ?? false,
           expiresAt: info.expiresAt,
           token,
           // Path the frontend opens with noVNC; the VNC port itself is never exposed.
@@ -156,6 +157,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
           currentUrl: info.currentUrl ?? null,
           recording: info.recording,
           highlight: info.highlight,
+          tooltip: info.tooltip ?? false,
           armedFinal: info.armedFinal ?? false,
           pages: info.pages ?? [],
           error: info.error ?? null,
@@ -217,6 +219,19 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       try {
         await loadOwnedSession(userId, request.params.id);
         return await app.worker.setHighlight(request.params.id, parsed.data.enabled);
+      } catch (err) {
+        const status = err instanceof WorkerHttpError ? err.statusCode : 503;
+        return reply.code(status).send({ error: (err as Error).message });
+      }
+    });
+
+    scoped.post<{ Params: { id: string } }>("/:id/tooltip", async (request, reply) => {
+      const { userId } = currentUser(request);
+      const parsed = ToggleSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
+      try {
+        await loadOwnedSession(userId, request.params.id);
+        return await app.worker.setTooltip(request.params.id, parsed.data.enabled);
       } catch (err) {
         const status = err instanceof WorkerHttpError ? err.statusCode : 503;
         return reply.code(status).send({ error: (err as Error).message });

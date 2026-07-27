@@ -137,6 +137,7 @@ export class AppClient {
       state: string;
       recording: boolean;
       highlight: boolean;
+      tooltip?: boolean;
       currentUrl: string | null;
       pages: Array<{ pageId: string; url: string; active: boolean }>;
     }>("GET", `/api/sessions/${sessionId}`);
@@ -156,6 +157,10 @@ export class AppClient {
 
   setHighlight(sessionId: string, enabled: boolean) {
     return this.ok("POST", `/api/sessions/${sessionId}/highlight`, { enabled });
+  }
+
+  setTooltip(sessionId: string, enabled: boolean) {
+    return this.ok("POST", `/api/sessions/${sessionId}/tooltip`, { enabled });
   }
 
   getRecording(sessionId: string) {

@@ -84,6 +84,12 @@ export class BrowserSession {
   highlight = true;
   /** Armed to capture the next interaction without letting the page perform it. */
   armedFinal = false;
+  /**
+   * The panel that describes the element under the pointer, drawn inside the
+   * page itself. Off unless asked for: it covers the very page the user is
+   * working on, and the same information is on the "selected element" panel.
+   */
+  tooltip = false;
   readonly expiresAt: Date;
 
   private readonly options: SessionOptions;
@@ -227,6 +233,7 @@ export class BrowserSession {
     await this.context.exposeBinding("__recorderConfig", () => ({
       recording: this.recording,
       highlight: this.highlight,
+      tooltip: this.tooltip,
       armedFinal: this.armedFinal
     }));
     // The tooltip asks Node which selector would be recorded instead of deciding
@@ -556,6 +563,11 @@ export class BrowserSession {
     await this.applyConfigToAllPages();
   }
 
+  async setTooltip(enabled: boolean): Promise<void> {
+    this.tooltip = enabled;
+    await this.applyConfigToAllPages();
+  }
+
   /** Records an explicit manual wait requested from the UI. */
   addManualWait(ms: number): void {
     this.pushAction({
@@ -570,6 +582,7 @@ export class BrowserSession {
     const config = {
       recording: this.recording,
       highlight: this.highlight,
+      tooltip: this.tooltip,
       armedFinal: this.armedFinal
     };
     try {

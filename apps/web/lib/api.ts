@@ -155,6 +155,8 @@ export interface SessionInfo {
   currentUrl?: string | null;
   recording: boolean;
   highlight: boolean;
+  /** The description panel that follows the pointer inside the stream. */
+  tooltip?: boolean;
   armedFinal?: boolean;
   pages?: Array<{ pageId: string; url: string; active: boolean }>;
   error?: string | null;
