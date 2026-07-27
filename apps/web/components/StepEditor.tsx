@@ -280,7 +280,7 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
                 <div className="flex shrink-0 flex-col items-end gap-1">
                   <div className="flex gap-1">
                     <button
-                      className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
+                      className="btn-mini"
                       onClick={() => move(index, -1)}
                       disabled={!canMove(steps, index, -1)}
                       title={
@@ -293,7 +293,7 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
                       ↑
                     </button>
                     <button
-                      className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
+                      className="btn-mini"
                       onClick={() => move(index, 1)}
                       disabled={!canMove(steps, index, 1)}
                       title={
@@ -308,7 +308,7 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
                   </div>
                   <div className="flex gap-1">
                     <button
-                      className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
+                      className="btn-mini"
                       onClick={() => {
                         setEditingValue(false);
                         setEditingId(step.id);
@@ -318,14 +318,14 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
                       Modifica
                     </button>
                     <button
-                      className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
+                      className="btn-mini"
                       onClick={() => update(step.id, { enabled: !step.enabled })}
                       data-testid={`step-toggle-${index}`}
                     >
                       {step.enabled ? "Disabilita" : "Abilita"}
                     </button>
                     <button
-                      className="rounded border border-slate-200 px-1.5 text-xs hover:bg-slate-50"
+                      className="btn-mini"
                       onClick={() => toggleFrom(index)}
                       title={
                         step.enabled
@@ -337,7 +337,7 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
                       {step.enabled ? "Disabilita da qui" : "Abilita da qui"}
                     </button>
                     <button
-                      className="rounded border border-red-200 px-1.5 text-xs text-red-700 hover:bg-red-50"
+                      className="btn-mini-danger"
                       onClick={() => remove(step.id)}
                       data-testid={`step-delete-${index}`}
                     >

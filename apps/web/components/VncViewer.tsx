@@ -78,7 +78,14 @@ export function VncViewer({ path, onStatusChange }: VncViewerProps) {
   }, [path, onStatusChange]);
 
   return (
-    <div className="relative h-full w-full bg-black" data-testid="vnc-viewer">
+    // `touch-action: none` is what makes the stream usable with a finger: without
+    // it a drag on the canvas scrolls and zooms the page that contains it instead
+    // of reaching the remote browser, and noVNC does not set it itself. Selection
+    // is off for the same reason — dragging must be a drag, not a text selection.
+    <div
+      className="relative h-full w-full touch-none select-none bg-black"
+      data-testid="vnc-viewer"
+    >
       <div ref={containerRef} className="h-full w-full" />
       {status !== "connected" ? (
         <p

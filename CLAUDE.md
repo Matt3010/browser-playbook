@@ -271,6 +271,16 @@ These are the classes of defect this codebase actually produced, so look here fi
   attempt against the real site. The list shows what a reference holds, `(vuota)`
   when it holds nothing, dots for a secret; `hasValue` had to be fixed while doing
   it, because it read the length of the *ciphertext* and encrypting "" is not empty.
+- **A tablet is not a small desktop.** Made usable on an iPad, which mostly meant
+  measuring rather than redesigning: the layout already fitted 834 px, but every
+  field was 14 px — Safari zooms towards anything smaller than 16 and never zooms
+  back out — the row controls were 18 px tall, which a mouse hits and a finger
+  does not, and the noVNC canvas had no `touch-action`, so a drag on the stream
+  scrolled the page instead of reaching the remote browser. `e2e/specs/ipad.spec.ts`
+  asserts all of it at an iPad viewport, including that no page asks to be
+  scrolled sideways. Phones are deliberately out of scope. What an iPad still
+  cannot do is *type* into the remote browser: tapping a field inside the stream
+  does not raise the on-screen keyboard, because the stream is a canvas.
 - **A dead handle is not a session.** The toolbar is driven by whether a session
   is held, and a session that had ended was kept: it offered "Chiudi browser" for
   a browser that had already closed, with no way back but a reload. A poll that

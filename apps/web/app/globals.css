@@ -29,9 +29,30 @@ body {
   @apply rounded-lg border border-slate-200 bg-white p-4 shadow-sm;
 }
 
+/*
+ * 16px, not 14: Safari on an iPad zooms towards any field whose text is smaller
+ * than that, and never zooms back out — one tap and the rest of the page is off
+ * screen. It costs nothing on a desktop.
+ */
 .input {
-  @apply w-full rounded-md border border-slate-300 px-3 py-2 text-sm
+  @apply w-full rounded-md border border-slate-300 px-3 py-2 text-base
     focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500;
+}
+
+/*
+ * The small controls that repeat on every row. They were 18 px tall, which is
+ * fine for a mouse and not for a finger: a tablet needs something it can hit
+ * without aiming.
+ */
+.btn-mini {
+  @apply inline-flex min-h-[32px] min-w-[32px] items-center justify-center rounded border
+    border-slate-200 px-2 text-xs text-slate-700 transition hover:bg-slate-50
+    disabled:cursor-not-allowed disabled:opacity-40;
+}
+
+.btn-mini-danger {
+  @apply inline-flex min-h-[32px] items-center justify-center rounded border border-red-200
+    px-2 text-xs text-red-700 transition hover:bg-red-50;
 }
 
 .label {
