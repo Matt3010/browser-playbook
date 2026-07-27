@@ -20,7 +20,7 @@ const NavigateSchema = z.object({ url: z.string().url() });
 const WaitSchema = z.object({ ms: z.coerce.number().int().min(0).max(120_000) });
 
 const InteractSchema = z.object({
-  kind: z.enum(["click", "fill", "select", "check", "uncheck", "press"]),
+  kind: z.enum(["click", "fill", "select", "check", "uncheck", "press", "type"]),
   selector: z.string().min(1).max(500).optional(),
   value: z.string().max(4000).optional(),
   pageId: z.string().min(1).optional(),
@@ -195,7 +195,13 @@ export async function buildControlServer(
       return reply.code(400).send({ error: "Invalid interaction payload" });
     }
     const session = sessions.get(request.params.id);
-    await session.interact(parsed.data);
+    try {
+      await session.interact(parsed.data);
+    } catch (err) {
+      // Refusing to act is an answer, not a crash: the caller has to be told
+      // why, so it can say so rather than leaving the user guessing.
+      return reply.code(409).send({ error: (err as Error).message });
+    }
     return describe(session);
   });
 

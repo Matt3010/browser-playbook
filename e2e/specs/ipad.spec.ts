@@ -141,6 +141,28 @@ test.describe("usable on an iPad", () => {
     await page.getByTestId("close-session").click();
   });
 
+  test("offers a way to write into the remote browser", async ({ page }) => {
+    // The stream is a canvas: tapping a field inside it raises no keyboard,
+    // because there is nothing on this side to focus. The field that does raise
+    // one is here, and the text is typed remotely by the server.
+    await page.goto(`/workflows/${workflowId}`);
+    await page.getByTestId("start-browser").click();
+    await expect(page.getByTestId("session-state")).toContainText("ready", { timeout: 90_000 });
+
+    const field = page.getByTestId("type-text");
+    await expect(field).toBeVisible();
+    expect(
+      await field.evaluate((el) => parseFloat(getComputedStyle(el).fontSize)),
+      "a smaller field would make Safari zoom in on every tap"
+    ).toBeGreaterThanOrEqual(16);
+    for (const id of ["type-send", "type-enter", "type-tab"]) {
+      const box = await page.getByTestId(id).boundingBox();
+      expect(box!.height, `${id} is too short to tap`).toBeGreaterThanOrEqual(32);
+    }
+
+    await page.getByTestId("close-session").click();
+  });
+
   test("the controls are big enough to hit with a finger", async ({ page }) => {
     await page.goto(`/workflows/${workflowId}`);
     for (const id of ["step-up-1", "step-down-1", "save-steps", "start-browser"]) {

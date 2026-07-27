@@ -665,7 +665,7 @@ export class BrowserSession {
    * human interacting through noVNC.
    */
   async interact(input: {
-    kind: "click" | "fill" | "select" | "check" | "uncheck" | "press";
+    kind: "click" | "fill" | "select" | "check" | "uncheck" | "press" | "type";
     selector?: string;
     value?: string;
     pageId?: string;
@@ -673,6 +673,41 @@ export class BrowserSession {
   }): Promise<void> {
     const page = input.pageId ? this.getPage(input.pageId) : this.getActivePage();
     if (!page) throw new Error(`No open page for pageId '${input.pageId ?? this.activePageId}'`);
+
+    /**
+     * Types into whatever the remote page has focused, with no selector.
+     *
+     * This is how a tablet writes: the stream is a canvas, so tapping a field
+     * inside it raises no keyboard — there is no field on this side to focus.
+     * The text is typed here instead, and because Chromium delivers real key
+     * events the page's own code runs exactly as it does for a keyboard, and
+     * the injected recorder turns it into the same `fill` step. Two ways in,
+     * one way through.
+     */
+    if (input.kind === "type") {
+      if (!input.value) throw new Error("type requires the text in 'value'");
+      const focused = await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        if (!el || el === document.body) return null;
+        const tag = el.tagName.toLowerCase();
+        if (tag === "textarea") return tag;
+        if (el.isContentEditable) return "contenteditable";
+        if (tag !== "input") return null;
+        const type = (el.getAttribute("type") || "text").toLowerCase();
+        const writable = ["text", "search", "url", "tel", "email", "password", "number", ""];
+        return writable.indexOf(type) >= 0 ? `input[${type}]` : null;
+      });
+      // Typing into the void is the guess this project refuses everywhere else:
+      // the text would land nowhere and the recording would simply be missing a
+      // step, with nothing to show for it.
+      if (!focused) {
+        throw new Error(
+          "The remote page has no text field in focus: click the field in the stream first"
+        );
+      }
+      await page.keyboard.type(input.value, { delay: 10 });
+      return;
+    }
 
     if (input.kind === "press") {
       if (!input.value) throw new Error("press requires a key in 'value'");

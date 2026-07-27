@@ -39,6 +39,8 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [nameDraft, setNameDraft] = useState("");
   /** The variables and secrets the steps reference, to show what they hold. */
   const [values, setValues] = useState<CredentialEntry[]>([]);
+  /** Text on its way to the remote browser. */
+  const [remoteText, setRemoteText] = useState("");
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   // Whether the last poll saw the recording running. The worker stops it by
@@ -316,6 +318,33 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     });
   }
 
+  /**
+   * Types into the remote browser. The stream is a canvas, so on a tablet there
+   * is no field to focus and no keyboard to raise: the text is typed here, into
+   * whatever the remote page has focused, and arrives there as real key events —
+   * so the recorder turns it into the same step as typing on a keyboard.
+   */
+  async function typeRemotely() {
+    if (!session || !remoteText) return;
+    await run("type", async () => {
+      await api.post(`/sessions/${session.sessionId}/interact`, {
+        kind: "type",
+        value: remoteText
+      });
+      log(`Scritto nel browser remoto: ${remoteText.length} caratteri`);
+      setRemoteText("");
+    });
+  }
+
+  /** Sends a single key to whatever the remote page has focused. */
+  async function pressRemotely(key: string) {
+    if (!session) return;
+    await run("press", async () => {
+      await api.post(`/sessions/${session.sessionId}/interact`, { kind: "press", value: key });
+      log(`Tasto inviato al browser remoto: ${key}`);
+    });
+  }
+
   async function navigate() {
     if (!session) return;
     await run("navigate", async () => {
@@ -570,6 +599,50 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           </>
         )}
       </div>
+
+      {session ? (
+        // Its own row: this is how you write into the remote browser from a
+        // tablet, where the stream cannot raise a keyboard, and how you paste
+        // into it from a desktop, where the clipboard is not shared.
+        <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 bg-slate-50 px-2 pb-2">
+          <input
+            className="input max-w-md flex-1"
+            value={remoteText}
+            onChange={(e) => setRemoteText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void typeRemotely();
+            }}
+            placeholder="Scrivi nel campo selezionato del browser remoto"
+            aria-label="Testo da scrivere nel browser remoto"
+            data-testid="type-text"
+          />
+          <button
+            className="btn"
+            onClick={typeRemotely}
+            disabled={busy !== null || !remoteText}
+            title="Tocca prima il campo dentro lo stream, poi scrivi qui"
+            data-testid="type-send"
+          >
+            Scrivi
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={() => void pressRemotely("Enter")}
+            disabled={busy !== null}
+            data-testid="type-enter"
+          >
+            Invio
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={() => void pressRemotely("Tab")}
+            disabled={busy !== null}
+            data-testid="type-tab"
+          >
+            Tab
+          </button>
+        </div>
+      ) : null}
 
         {/* No stream, no box: an empty frame the height of the screen says
             nothing that the hint in the bar does not say in one line. */}

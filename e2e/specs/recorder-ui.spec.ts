@@ -157,6 +157,68 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
     await expect(page.getByTestId("live-log")).toContainText("Sessione");
   });
 
+  test("types into the remote browser from the page, and records one step", async ({ page }) => {
+    // The stream is a canvas: tapping a field inside it raises no keyboard on a
+    // tablet, because there is no field to focus. The text is typed by the
+    // server into whatever the remote page has focused, so it arrives as real
+    // key events and is recorded exactly like typing on a keyboard.
+    await loginThroughUi(page);
+    const workflow = await client.createWorkflow(
+      `Scrittura remota ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    const sessionId = await startSession(page, workflow.id);
+
+    await page.getByTestId("record").click();
+    await expect(page.getByTestId("recording-state")).toContainText("attiva");
+
+    // Focus the remote field the way a finger does: a click inside the stream.
+    await client.interact(sessionId, { kind: "click", selector: "#text-input" });
+
+    await page.getByTestId("type-text").fill("scritto dall'app");
+    await page.getByTestId("type-send").click();
+
+    // The recorded value is read from the live element by the injected script,
+    // so asserting it is asserting that the text reached the remote page.
+    await expect
+      .poll(
+        async () =>
+          (await client.getRecording(sessionId)).steps.find((s) => s.type === "fill")?.value,
+        { timeout: 30_000 }
+      )
+      .toBe("scritto dall'app");
+
+    const fills = (await client.getRecording(sessionId)).steps.filter((s) => s.type === "fill");
+    expect(fills, "one field, one step").toHaveLength(1);
+
+    // Enter goes to the same place, and is recorded as the press it is.
+    await page.getByTestId("type-enter").click();
+    await expect
+      .poll(async () => (await client.getRecording(sessionId)).steps.some((s) => s.type === "press"))
+      .toBe(true);
+
+    await page.getByTestId("close-session").click();
+  });
+
+  test("refuses to type when the remote page has nothing focused", async ({ page }) => {
+    // Typing into the void is the kind of guess this project refuses everywhere
+    // else: the text would land wherever, or nowhere, and the recording would
+    // simply be missing a step nobody noticed.
+    await loginThroughUi(page);
+    const workflow = await client.createWorkflow(
+      `Scrittura senza fuoco ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await startSession(page, workflow.id);
+
+    await page.getByTestId("type-text").fill("nessuno mi aspetta");
+    await page.getByTestId("type-send").click();
+
+    // Server messages are in English here, as everywhere else in this product.
+    await expect(page.getByTestId("recorder-error")).toContainText("no text field in focus");
+    await page.getByTestId("close-session").click();
+  });
+
   test("running straight after recording stores the secret the steps reference", async ({
     page
   }) => {

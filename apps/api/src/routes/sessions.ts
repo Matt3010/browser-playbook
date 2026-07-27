@@ -27,7 +27,7 @@ const CreateSessionSchema = z.object({
 const ToggleSchema = z.object({ enabled: z.boolean() });
 const NavigateSchema = z.object({ url: z.string().min(1).max(2000) });
 const InteractSchema = z.object({
-  kind: z.enum(["click", "fill", "select", "check", "uncheck", "press"]),
+  kind: z.enum(["click", "fill", "select", "check", "uncheck", "press", "type"]),
   selector: z.string().min(1).max(500).optional(),
   value: z.string().max(4000).optional(),
   pageId: z.string().min(1).optional(),
