@@ -298,6 +298,7 @@ run_step "e2e stack and healthchecks" $E2E e2e/specs/stack.spec.ts || exit 1
 run_step "e2e browser worker and noVNC" $E2E e2e/specs/novnc.spec.ts || exit 1
 run_step "e2e session isolation" $E2E e2e/specs/isolation.spec.ts || exit 1
 run_step "e2e recorder and overlay" $E2E e2e/specs/recorder.spec.ts || exit 1
+run_step "e2e recorder page" $E2E e2e/specs/recorder-ui.spec.ts || exit 1
 run_step "e2e step editor" $E2E e2e/specs/editor.spec.ts || exit 1
 run_step "e2e step types" $E2E e2e/specs/step-types.spec.ts || exit 1
 run_step "e2e main flow" $E2E e2e/specs/main-flow.spec.ts || exit 1

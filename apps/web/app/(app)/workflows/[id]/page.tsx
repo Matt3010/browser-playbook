@@ -36,9 +36,25 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [verifications, setVerifications] = useState<StepVerification[]>([]);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Whether the last poll saw the recording running. The worker stops it by
+  // itself when it captures the closing action, so this is what tells a stop the
+  // user asked for from one the editor has not seen the actions of yet.
+  const wasRecordingRef = useRef(false);
 
   const log = useCallback((message: string) => {
     setLogLines((lines) => [...lines.slice(-199), `${new Date().toLocaleTimeString()} ${message}`]);
+  }, []);
+
+  /**
+   * Pulls the recorded steps into the editor. Every path that needs them goes
+   * through here: the poll, and stopping the recording by hand.
+   */
+  const pullRecording = useCallback(async (sessionId: string): Promise<RecordingResult> => {
+    const recording = await api.get<RecordingResult>(`/sessions/${sessionId}/recording`);
+    setSteps(recording.steps);
+    setVerifications(recording.verifications ?? []);
+    setDirty(true);
+    return recording;
   }, []);
 
   const loadWorkflow = useCallback(async () => {
@@ -143,15 +159,21 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           log(`Sessione ${info.state}`);
           return;
         }
-        if (info.recording) {
-          const recording = await api.get<RecordingResult>(`/sessions/${sessionId}/recording`);
-          setSteps(recording.steps);
-          setVerifications(recording.verifications ?? []);
-          setDirty(true);
+        // Capturing the closing action stops the recording on the worker, which
+        // disables Stop — the only other thing that pulls. Pulling once more on
+        // the way down is what keeps that last action from being lost.
+        if (info.recording || wasRecordingRef.current) {
+          const recording = await pullRecording(sessionId);
           if (recording.skipped > 0) {
             log(`${recording.skipped} azioni scartate: selector non univoco`);
           }
+          // The capture is the only stop the user did not ask for, so it is the
+          // only one worth reporting here; Stop reports itself.
+          if (!info.recording && recording.steps.some((s) => s.isFinal)) {
+            log("Azione finale registrata senza eseguirla; registrazione fermata");
+          }
         }
+        wasRecordingRef.current = info.recording;
       } catch {
         /* transient errors are reported by explicit actions */
       }
@@ -165,14 +187,10 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
       setSession({ ...session, recording: enabled });
 
       if (!enabled) {
-        // Polling stops with the recording, so pull the final action stream once
-        // more: otherwise the last actions would never reach the editor.
-        const recording = await api.get<RecordingResult>(
-          `/sessions/${session.sessionId}/recording`
-        );
-        setSteps(recording.steps);
-        setVerifications(recording.verifications ?? []);
-        setDirty(true);
+        // Pull the final action stream once more, and take the transition with
+        // it, so the poll does not report this stop a second time.
+        const recording = await pullRecording(session.sessionId);
+        wasRecordingRef.current = false;
 
         const broken = (recording.verifications ?? []).filter(
           (v) => v.status === "ambiguous" || v.status === "not-found"
@@ -248,21 +266,31 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     });
   }
 
+  /**
+   * Writes the step list to the workflow. Secrets captured while recording are
+   * persisted server-side first, so the {{credentials.x}} references in the
+   * steps can be resolved at run time. Both Save and "Esegui adesso" go through
+   * here: saving the steps without the secret they reference queues a run that
+   * fails on the first field it has to fill.
+   */
+  async function persistSteps(): Promise<Step[]> {
+    if (session) {
+      const result = await api.post<{ saved: string[] }>(
+        `/sessions/${session.sessionId}/credentials`
+      );
+      if (result.saved.length > 0) {
+        log(`Credenziali salvate: ${result.saved.join(", ")}`);
+      }
+    }
+    const saved = await api.put<Step[]>(`/workflows/${workflowId}/steps`, { steps });
+    setSteps(saved);
+    setDirty(false);
+    return saved;
+  }
+
   async function save() {
     await run("save", async () => {
-      // Secrets captured while recording are persisted server-side first, so the
-      // {{credentials.x}} references in the steps can be resolved at run time.
-      if (session) {
-        const result = await api.post<{ saved: string[] }>(
-          `/sessions/${session.sessionId}/credentials`
-        );
-        if (result.saved.length > 0) {
-          log(`Credenziali salvate: ${result.saved.join(", ")}`);
-        }
-      }
-      const saved = await api.put<Step[]>(`/workflows/${workflowId}/steps`, { steps });
-      setSteps(saved);
-      setDirty(false);
+      const saved = await persistSteps();
       await loadWorkflow();
       log(`${saved.length} step salvati`);
     });
@@ -270,11 +298,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
 
   async function execute() {
     const execution = await run("execute", async () => {
-      if (dirty) {
-        const saved = await api.put<Step[]>(`/workflows/${workflowId}/steps`, { steps });
-        setSteps(saved);
-        setDirty(false);
-      }
+      if (dirty) await persistSteps();
       return api.post<Execution>(`/workflows/${workflowId}/executions`);
     });
     if (execution) router.push(`/executions/${execution.id}`);

@@ -188,6 +188,21 @@ These are the classes of defect this codebase actually produced, so look here fi
   waiting on `service_completed_successfully` hangs and the stack never comes up.
   A one-shot service that reuses a server image must set `healthcheck: disable:
   true`.
+- **A stop nobody asked for is still a stop.** The recorder page pulled the
+  recorded steps only while the session reported `recording: true`, and capturing
+  the closing action turns that off *on the worker*. So the one action the user
+  armed was recorded, suppressed on the site exactly as intended, and then never
+  reached the editor: Stop, the only other thing that pulls, is disabled by then,
+  and Save wrote the list without it — no error anywhere. The poll now pulls once
+  more on the falling edge, and the pull itself lives in one place
+  (`pullRecording`). Any state the UI mirrors by polling a flag needs the
+  transition handled, not only the steady state.
+- **Two buttons that write the same thing must write all of it.** Save persisted
+  the secrets captured while recording and *then* the steps; "Esegui adesso"
+  saved the steps alone when they were dirty, so the first run straight after a
+  recording died with `{{credentials.x}} is not defined` — and on a real site
+  those are failed logins that lock the account. Both go through `persistSteps`
+  now. Splitting a write in two is fine; splitting it in two *places* is not.
 
 ### Things a test cannot pin down
 
@@ -200,6 +215,8 @@ e2e and cover the branch itself with unit tests
 ## Verification
 
 `make verify` (or `pnpm verify`) is the single gate. It must exit 0.
+It runs the e2e specs **one file at a time, from a list in `scripts/verify.sh`**:
+a new spec that is not added there is never run by the gate.
 It runs: install, prisma generate, build, lint, typecheck, unit tests, integration
 tests against throwaway Postgres/Redis, Docker image builds, the test stack with
 healthchecks, migration and seed assertions, then every e2e suite, then a
