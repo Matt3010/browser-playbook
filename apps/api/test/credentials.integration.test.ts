@@ -120,7 +120,9 @@ describe("credentials and variables API", () => {
       url: `/api/credentials/${created.json().id}`,
       headers: { cookie: user.cookie }
     });
-    expect(response.statusCode).toBe(204);
+    // 200 rather than 204: the answer now carries what was deleted, and whether
+    // anything switched off still names it.
+    expect(response.statusCode).toBe(200);
     expect(await ctx.prisma.credential.count()).toBe(0);
   });
 
@@ -217,7 +219,8 @@ describe("deleting a value a workflow depends on", () => {
       url: `/api/credentials/${credential.id}`,
       headers: { cookie: user.cookie }
     });
-    expect(response.statusCode).toBe(204);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().referencedByDisabled).toEqual([]);
   });
 
   it("ignores a reference made by a disabled step", async () => {
@@ -249,6 +252,9 @@ describe("deleting a value a workflow depends on", () => {
       url: `/api/credentials/${credential.id}`,
       headers: { cookie: user.cookie }
     });
-    expect(response.statusCode).toBe(204);
+    expect(response.statusCode).toBe(200);
+    // Allowed, and said out loud: a step is usually disabled for the afternoon,
+    // and re-enabling it later would give a workflow that refuses to start.
+    expect(response.json().referencedByDisabled).toHaveLength(1);
   });
 });

@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { hasFormula } from "@app/shared";
-import { AppClient, SEED_EMAIL, SEED_PASSWORD } from "../helpers/app-client";
+import { AppClient, SEED_EMAIL, SEED_PASSWORD, step } from "../helpers/app-client";
 
 /**
  * The values a workflow types. A variable is ordinary data and can be read and
@@ -111,6 +111,82 @@ test.describe("variables and secrets", () => {
 
     await page.getByTestId("credential-submit").click();
     await expect(page.getByTestId(`credential-row-ordine${suffix}`)).toContainText("formula");
+  });
+
+  test("refuses to delete a value a workflow is using, and says which", async ({ page }) => {
+    // The API refuses this, with the names of the workflows that would stop
+    // working. The page threw the answer away, so the button looked dead.
+    const name = `usata${suffix}`;
+    await client.saveCredential(name, "un valore", "variable");
+
+    const workflow = await client.createWorkflow(
+      `Usa la variabile ${suffix}`,
+      "http://test-web:3001/elements"
+    );
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai", value: "http://test-web:3001/elements" }),
+      step({
+        type: "fill",
+        name: "Scrivi il valore",
+        value: `{{variables.${name}}}`,
+        selector: { strategy: "id", value: "text-input", fallback: null, pageId: "main", frame: null }
+      })
+    ]);
+
+    await page.reload();
+    await page.getByTestId(`credential-delete-${name}`).click();
+
+    await expect(page.getByTestId("credential-error")).toContainText(`Usa la variabile ${suffix}`);
+    // And it is still there, because it was not deleted.
+    await expect(page.getByTestId(`credential-row-${name}`)).toBeVisible();
+    expect((await client.listCredentials()).map((c) => c.name)).toContain(name);
+  });
+
+  test("says so when it does delete", async ({ page }) => {
+    // The other half of the same silence: nothing was said either way.
+    const name = `inutilizzata${suffix}`;
+    await client.saveCredential(name, "un valore", "variable");
+    await page.reload();
+
+    await page.getByTestId(`credential-delete-${name}`).click();
+
+    await expect(page.getByTestId("credential-notice")).toContainText(name);
+    await expect(page.getByTestId(`credential-row-${name}`)).toBeHidden();
+    expect((await client.listCredentials()).map((c) => c.name)).not.toContain(name);
+  });
+
+  test("warns when the only user of a deleted value is a disabled step", async ({ page }) => {
+    // A disabled step cannot be broken by the deletion, so it is allowed — but a
+    // step is usually disabled for the afternoon, not for ever, and re-enabling
+    // it later gives a workflow that refuses to start for a reason from days
+    // ago. Allowed, and said out loud.
+    const name = `sospesa${suffix}`;
+    await client.saveCredential(name, "un valore", "variable");
+
+    const workflow = await client.createWorkflow(
+      `Step spento ${suffix}`,
+      "http://test-web:3001/elements"
+    );
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai", value: "http://test-web:3001/elements" }),
+      step({
+        type: "fill",
+        name: "Scrivi il valore",
+        value: `{{variables.${name}}}`,
+        enabled: false,
+        selector: { strategy: "id", value: "text-input", fallback: null, pageId: "main", frame: null }
+      })
+    ]);
+
+    await page.reload();
+    await page.getByTestId(`credential-delete-${name}`).click();
+
+    const notice = page.getByTestId("credential-notice");
+    await expect(notice).toContainText(name);
+    await expect(notice, "the workflow that will want it back").toContainText(
+      `Step spento ${suffix}`
+    );
+    expect((await client.listCredentials()).map((c) => c.name)).not.toContain(name);
   });
 
   test("says when a value holds nothing", async ({ page }) => {

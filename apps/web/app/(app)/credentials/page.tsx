@@ -29,6 +29,8 @@ export default function CredentialsPage() {
   const [value, setValue] = useState("");
   const [kind, setKind] = useState<"variable" | "secret">("variable");
   const [error, setError] = useState<string | null>(null);
+  /** What just happened, when it worked: a deletion says nothing otherwise. */
+  const [notice, setNotice] = useState<string | null>(null);
   /** The entry being changed, and what will be written when it is saved. */
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
@@ -54,9 +56,32 @@ export default function CredentialsPage() {
     }
   }
 
-  async function remove(id: string) {
-    await api.del(`/credentials/${id}`);
-    await load();
+  /**
+   * Deletes a value, and says what happened either way.
+   *
+   * The server refuses to remove one a workflow still names, and answers with
+   * the workflows that would stop working. The page used to throw that answer
+   * away: the button did nothing, said nothing, and looked broken — and on the
+   * other side, a deletion that did go through was just as silent.
+   */
+  async function remove(entry: CredentialEntry) {
+    setError(null);
+    setNotice(null);
+    try {
+      const result = await api.del<{ referencedByDisabled?: string[] }>(
+        `/credentials/${entry.id}`
+      );
+      const suspended = result?.referencedByDisabled ?? [];
+      setNotice(
+        suspended.length === 0
+          ? `"${entry.name}" eliminata.`
+          : `"${entry.name}" eliminata. È ancora nominata da uno step disabilitato di: ` +
+            `${suspended.join(", ")} — riattivandolo, il workflow non partirà.`
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Errore inatteso");
+    }
   }
 
   /**
@@ -85,6 +110,15 @@ export default function CredentialsPage() {
   return (
     <div className="space-y-4">
       <h1 className="text-xl font-semibold">Variabili e credenziali</h1>
+
+      {notice ? (
+        <p
+          className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-800"
+          data-testid="credential-notice"
+        >
+          {notice}
+        </p>
+      ) : null}
 
       <form onSubmit={save} className="card space-y-3" data-testid="credential-form">
         {error ? (
@@ -243,7 +277,11 @@ export default function CredentialsPage() {
                   >
                     {entry.kind === "secret" ? "Sostituisci" : "Modifica"}
                   </button>
-                  <button className="btn-danger" onClick={() => void remove(entry.id)}>
+                  <button
+                    className="btn-danger"
+                    onClick={() => void remove(entry)}
+                    data-testid={`credential-delete-${entry.name}`}
+                  >
                     Elimina
                   </button>
                 </>

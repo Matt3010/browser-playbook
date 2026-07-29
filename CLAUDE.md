@@ -271,6 +271,14 @@ These are the classes of defect this codebase actually produced, so look here fi
   attempt against the real site. The list shows what a reference holds, `(vuota)`
   when it holds nothing, dots for a secret; `hasValue` had to be fixed while doing
   it, because it read the length of the *ciphertext* and encrypting "" is not empty.
+- **A button that says nothing looks broken.** Deleting a value a workflow still
+  names is refused by the API, with the names of the workflows that would stop
+  working — and the page threw that answer away: the button did nothing, said
+  nothing, and read as a bug. The silence went the other way too, since a
+  deletion that did go through was just as quiet. Both ends speak now, and a
+  third case with them: a reference left in a *disabled* step does not block the
+  deletion — a step that never runs cannot break — but it is said out loud,
+  because a step is usually disabled for the afternoon rather than for ever.
 - **Recording a password is not permission to replace one.** A secret belongs to
   the site, not to the workflow being recorded: every workflow on that site logs
   in with it. Saving a recording upserted it, so recording a second workflow —

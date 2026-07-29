@@ -28,7 +28,15 @@ async function workflowsReferencing(
   app: FastifyInstance,
   userId: string,
   name: string,
-  kind: string
+  kind: string,
+  /**
+   * Whether a reference inside a disabled step counts. It does not for the
+   * refusal — a step that never runs cannot be broken — but it is worth saying
+   * out loud, because a step is usually disabled for the afternoon rather than
+   * for ever, and re-enabling it later gives a workflow that refuses to start
+   * for a reason from days ago.
+   */
+  countDisabled = false
 ): Promise<string[]> {
   const wanted = kind === "secret" ? "credentials" : "variables";
   const workflows = await app.prisma.workflow.findMany({
@@ -39,7 +47,7 @@ async function workflowsReferencing(
     .filter((workflow) =>
       workflow.steps.some(
         (step) =>
-          step.enabled &&
+          (countDisabled || step.enabled) &&
           step.valueTemplate &&
           extractTemplateRefs(step.valueTemplate).some(
             (ref) => ref.kind === wanted && ref.key === name
@@ -150,7 +158,11 @@ export async function credentialRoutes(app: FastifyInstance): Promise<void> {
       });
     }
 
+    // Nothing that runs uses it. Something that is merely switched off still
+    // might, and the moment of deletion is the only moment anyone is looking.
+    const suspended = await workflowsReferencing(app, userId, existing.name, existing.kind, true);
+
     await app.prisma.credential.delete({ where: { id: existing.id } });
-    return reply.code(204).send();
+    return reply.code(200).send({ deleted: existing.name, referencedByDisabled: suspended });
   });
 }
