@@ -400,6 +400,36 @@ test.describe("single future schedule", () => {
     );
   });
 
+  test("the workflow list says what is coming next", async ({ page }) => {
+    // A schedule lives on the page of the workflow it belongs to, so with a few
+    // of them nobody remembers what is about to happen tonight.
+    const workflow = await client.createWorkflow(
+      `In coda ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [gotoStep(`${TEST_WEB_INTERNAL_URL}/elements`)]);
+    const created = await client.scheduleRecurring(workflow.id, { kind: "minutes", every: 15 });
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill("test@example.com");
+    await page.getByLabel("Password").fill("TestPassword123!");
+    await page.getByRole("button", { name: "Login" }).click();
+    await expect(page.getByTestId("dashboard")).toBeVisible();
+
+    await page.goto("/workflows");
+    const queue = page.getByTestId("upcoming-list");
+    await expect(queue).toBeVisible();
+    await expect(queue).toContainText(`In coda`);
+    // The recurrence reads as a sentence here too, not as a cron line.
+    await expect(queue).toContainText("ogni 15 minuti");
+    await expect(queue).not.toContainText("*/15");
+
+    // And it disappears with the schedule.
+    await client.cancelSchedule(created.id);
+    await page.reload();
+    await expect(page.getByTestId("upcoming-empty")).toBeVisible();
+  });
+
   test("refuses half an hour, and says where the half hour lives", async ({ page }) => {
     // Cron steps are whole numbers: there is no such thing as every 0.5 hours.
     // The form used to accept it and show a sentence that cannot exist, leaving

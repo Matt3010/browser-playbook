@@ -296,3 +296,110 @@ describe("recurring schedules", () => {
     expect(await ctx.queue.nextRunOf(second.id)).toBeTruthy();
   });
 });
+
+describe("what is coming next", () => {
+  async function runnable(name: string) {
+    const workflow = await createWorkflow(ctx.app, user.cookie, name);
+    await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: { steps: [gotoStep("http://test-web:3001/elements")] }
+    });
+    return workflow;
+  }
+
+  async function upcoming() {
+    const response = await ctx.app.inject({
+      method: "GET",
+      url: "/api/schedules/upcoming",
+      headers: { cookie: user.cookie }
+    });
+    expect(response.statusCode).toBe(200);
+    return response.json() as Array<{
+      workflowName: string;
+      at: string | null;
+      cron: string | null;
+    }>;
+  }
+
+  it("lists what is due, soonest first, whichever workflow it belongs to", async () => {
+    const later = await runnable("Fra due ore");
+    const sooner = await runnable("Fra un'ora");
+
+    await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${later.id}/schedules`,
+      headers: { cookie: user.cookie },
+      payload: {
+        runAt: new Date(Date.now() + 2 * 60 * 60_000).toISOString(),
+        timezone: "Europe/Rome"
+      }
+    });
+    await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${sooner.id}/schedules`,
+      headers: { cookie: user.cookie },
+      payload: {
+        runAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+        timezone: "Europe/Rome"
+      }
+    });
+
+    const list = await upcoming();
+    expect(list.map((entry) => entry.workflowName)).toEqual(["Fra un'ora", "Fra due ore"]);
+  });
+
+  it("says when a recurring schedule is due next, which only the queue knows", async () => {
+    const workflow = await runnable("Ogni quarto d'ora");
+    await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/schedules`,
+      headers: { cookie: user.cookie },
+      payload: { recurrence: { kind: "minutes", every: 15 }, timezone: "Europe/Rome" }
+    });
+
+    const list = await upcoming();
+    expect(list).toHaveLength(1);
+    expect(list[0]).toMatchObject({ workflowName: "Ogni quarto d'ora", cron: "*/15 * * * *" });
+    expect(new Date(list[0].at as string).getTime()).toBeGreaterThan(Date.now());
+  });
+
+  it("forgets a schedule once it has been cancelled", async () => {
+    const workflow = await runnable("Poi annullata");
+    const created = (
+      await ctx.app.inject({
+        method: "POST",
+        url: `/api/workflows/${workflow.id}/schedules`,
+        headers: { cookie: user.cookie },
+        payload: { recurrence: { kind: "days", every: 1, time: "03:00" }, timezone: "Europe/Rome" }
+      })
+    ).json();
+
+    expect(await upcoming()).toHaveLength(1);
+    await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/schedules/${created.id}`,
+      headers: { cookie: user.cookie }
+    });
+    expect(await upcoming()).toHaveLength(0);
+  });
+
+  it("never shows another user what is coming for them", async () => {
+    const workflow = await runnable("Mia");
+    await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/schedules`,
+      headers: { cookie: user.cookie },
+      payload: { recurrence: { kind: "days", every: 1, time: "03:00" }, timezone: "Europe/Rome" }
+    });
+
+    const other = await registerUser(ctx.app, `estraneo-${Date.now()}@example.com`);
+    const response = await ctx.app.inject({
+      method: "GET",
+      url: "/api/schedules/upcoming",
+      headers: { cookie: other.cookie }
+    });
+    expect(response.json()).toEqual([]);
+  });
+});

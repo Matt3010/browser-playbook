@@ -133,6 +133,44 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  /**
+   * What is due next, across every workflow of this user.
+   *
+   * A schedule is easy to lose sight of: it lives on the page of the workflow it
+   * belongs to, and by the time there are a few of them nobody remembers what is
+   * about to happen tonight. When a recurring schedule is next due is not in the
+   * database at all — the queue holds the recurrence — so it is asked for here.
+   */
+  app.get("/schedules/upcoming", async (request) => {
+    const { userId } = currentUser(request);
+    const schedules = await app.prisma.schedule.findMany({
+      where: { status: "scheduled", workflow: { userId } },
+      include: { workflow: { select: { id: true, name: true } } }
+    });
+
+    const entries = await Promise.all(
+      schedules.map(async (schedule) => ({
+        id: schedule.id,
+        workflowId: schedule.workflow.id,
+        workflowName: schedule.workflow.name,
+        cron: schedule.cron,
+        timezone: schedule.timezone,
+        at: schedule.cron
+          ? ((await app.queue.nextRunOf(schedule.id))?.toISOString() ?? null)
+          : (schedule.runAt?.toISOString() ?? null)
+      }))
+    );
+
+    // Soonest first; one whose next run the queue could not tell us goes last
+    // rather than pretending to be imminent.
+    return entries.sort((a, b) => {
+      if (a.at === b.at) return 0;
+      if (!a.at) return 1;
+      if (!b.at) return -1;
+      return a.at < b.at ? -1 : 1;
+    });
+  });
+
   app.get<{ Params: { id: string } }>("/workflows/:id/schedules", async (request) => {
     const { userId } = currentUser(request);
     const workflow = await loadOwnedWorkflow(app, userId, request.params.id);

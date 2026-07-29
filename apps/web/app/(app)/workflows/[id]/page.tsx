@@ -17,68 +17,9 @@ import {
   type Workflow
 } from "@/lib/api";
 import { mergeRecording } from "@/lib/recording";
+import { describeCron, describeRecurrence, WEEKDAYS } from "@/lib/recurrence";
 import { StepEditor } from "@/components/StepEditor";
 import { VncViewer, type VncStatus } from "@/components/VncViewer";
-
-const WEEKDAYS = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
-
-/** A recurrence as a sentence, because "0 3 * * 1" is not one. */
-function describeRecurrence(recurrence: Recurrence): string {
-  switch (recurrence.kind) {
-    case "minutes":
-      return recurrence.every === 1 ? "ogni minuto" : `ogni ${recurrence.every} minuti`;
-    case "hours":
-      return recurrence.every === 1
-        ? `ogni ora al minuto ${recurrence.minute}`
-        : `ogni ${recurrence.every} ore al minuto ${recurrence.minute}`;
-    case "days":
-      return recurrence.every === 1
-        ? `ogni giorno alle ${recurrence.time}`
-        : `ogni ${recurrence.every} giorni alle ${recurrence.time}`;
-    case "weekly":
-      return `ogni ${WEEKDAYS[recurrence.weekday]} alle ${recurrence.time}`;
-    case "months":
-      return recurrence.every === 1
-        ? `il ${recurrence.day} di ogni mese alle ${recurrence.time}`
-        : `il ${recurrence.day} ogni ${recurrence.every} mesi alle ${recurrence.time}`;
-  }
-}
-
-/** The step of a cron field: a bare star is every one, a step of three every third. */
-function stepOf(field: string): number {
-  return field.startsWith("*/") ? Number(field.slice(2)) : 1;
-}
-
-/**
- * The same sentence, read back from what was stored. The cron expression is
- * derived from the recurrence, so it can be read back into one — and a schedule
- * whose line the user cannot read is a schedule they cannot check.
- */
-function describeCron(cron: string): string {
-  const [minute, hour, day, month, weekday] = cron.split(" ");
-  const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
-
-  if (hour === "*" || hour.startsWith("*/")) {
-    if (minute === "*" || minute.startsWith("*/")) {
-      return describeRecurrence({ kind: "minutes", every: stepOf(minute) });
-    }
-    return describeRecurrence({ kind: "hours", every: stepOf(hour), minute: Number(minute) });
-  }
-  if (weekday !== "*") {
-    return describeRecurrence({ kind: "weekly", weekday: Number(weekday), time });
-  }
-  // The day field is either a step — every N days — or the day of the month a
-  // monthly schedule lands on. A step is not a day number.
-  if (day === "*" || day.startsWith("*/")) {
-    return describeRecurrence({ kind: "days", every: stepOf(day), time });
-  }
-  return describeRecurrence({
-    kind: "months",
-    every: stepOf(month),
-    day: Number(day),
-    time
-  });
-}
 
 export default function WorkflowDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter();
@@ -134,6 +75,8 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
    */
   const lastPulledRef = useRef<Map<string, Step>>(new Map());
   const removedRef = useRef<Set<string>>(new Set());
+  /** The step list as it stands, readable outside a state updater. */
+  const stepsRef = useRef<Step[]>([]);
   // Whether the last poll saw the recording running. The worker stops it by
   // itself when it captures the closing action, so this is what tells a stop the
   // user asked for from one the editor has not seen the actions of yet.
@@ -155,16 +98,22 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
       if (check) checks.set(step.id, check);
     });
 
-    setSteps((local) => {
-      const merged = mergeRecording(recording.steps, local, {
-        lastPulled: lastPulledRef.current,
-        removed: removedRef.current
-      });
-      lastPulledRef.current = new Map(recording.steps.map((step) => [step.id, step]));
-      setVerifications(merged.map((step) => checks.get(step.id) ?? { status: "unchecked" }));
-      return merged;
+    const merged = mergeRecording(recording.steps, stepsRef.current, {
+      lastPulled: lastPulledRef.current,
+      removed: removedRef.current
     });
-    setDirty(true);
+    lastPulledRef.current = new Map(recording.steps.map((step) => [step.id, step]));
+    setVerifications(merged.map((step) => checks.get(step.id) ?? { status: "unchecked" }));
+
+    // Only a pull that actually brought something marks the list unsaved. A poll
+    // that changed nothing used to set the flag anyway, so "Modifiche non
+    // salvate" came back a second after every save for as long as the recording
+    // ran — and nothing could tell a real change from the clock.
+    const changed = JSON.stringify(merged) !== JSON.stringify(stepsRef.current);
+    if (changed) {
+      setSteps(merged);
+      setDirty(true);
+    }
     setKnownSecrets(
       (recording.credentials ?? []).filter((entry) => entry.exists).map((entry) => entry.name)
     );
@@ -187,6 +136,11 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     const data = await api.get<Schedule[]>(`/workflows/${workflowId}/schedules`);
     setSchedules(data);
   }, [workflowId]);
+
+  // The list, mirrored where the poll can read it without a state updater.
+  useEffect(() => {
+    stepsRef.current = steps;
+  }, [steps]);
 
   useEffect(() => {
     loadWorkflow().catch((err) => setError(err.message));
