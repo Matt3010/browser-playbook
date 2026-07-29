@@ -251,6 +251,68 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
     await expect(page.getByTestId("execution-stream")).toBeHidden({ timeout: 30_000 });
   });
 
+  test("a step deleted while recording stays deleted", async ({ page }) => {
+    // The editor polls the recording while it runs. Left to overwrite the list,
+    // the poll undoes whatever the user just did to it: the step comes back a
+    // second later, and there is no way to get rid of it.
+    await loginThroughUi(page);
+    const workflow = await client.createWorkflow(
+      `Cancella mentre registro ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    const sessionId = await startSession(page, workflow.id);
+
+    await page.getByTestId("record").click();
+    await expect(page.getByTestId("recording-state")).toContainText("attiva");
+
+    await client.interact(sessionId, { kind: "fill", selector: "#text-input", value: "uno" });
+    await client.interact(sessionId, { kind: "click", selector: "#real-button" });
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(3, { timeout: 30_000 });
+
+    const deleted = await page.getByTestId("step-name-1").innerText();
+    await page.getByTestId("step-delete-1").click();
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(2);
+
+    // Three polls' worth: if the list is going to be overwritten, it happens here.
+    await page.waitForTimeout(4000);
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(2);
+    await expect(page.getByTestId("step-list")).not.toContainText(deleted);
+
+    await page.getByTestId("close-session").click();
+  });
+
+  test("the step form stays open while a recording is running", async ({ page }) => {
+    // It was closing on its own after about a second: the poll handed the editor
+    // a list of steps with new ids, so the one the form was editing no longer
+    // existed. It looked like the mouse doing it; it was the clock.
+    await loginThroughUi(page);
+    const workflow = await client.createWorkflow(
+      `Modale mentre registro ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    const sessionId = await startSession(page, workflow.id);
+
+    await page.getByTestId("record").click();
+    await expect(page.getByTestId("recording-state")).toContainText("attiva");
+    await client.interact(sessionId, { kind: "fill", selector: "#text-input", value: "uno" });
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(2, { timeout: 30_000 });
+
+    await page.getByTestId("step-edit-1").click();
+    const form = page.getByTestId("step-form-1");
+    await expect(form).toBeVisible();
+
+    await page.waitForTimeout(4000);
+    await expect(form, "the form must not close by itself").toBeVisible();
+
+    // And what is typed into it survives the next poll.
+    await page.getByTestId("step-name-input-1").fill("Nome scelto a mano");
+    await page.waitForTimeout(3000);
+    await expect(page.getByTestId("step-name-input-1")).toHaveValue("Nome scelto a mano");
+
+    await page.getByTestId("step-form-close").click();
+    await page.getByTestId("close-session").click();
+  });
+
   test("running straight after recording stores the secret the steps reference", async ({
     page
   }) => {

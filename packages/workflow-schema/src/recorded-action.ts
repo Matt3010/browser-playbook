@@ -46,6 +46,16 @@ export const ElementInfoSchema = z.object({
 });
 
 export const RecordedActionSchema = z.object({
+  /**
+   * Identity of the action, assigned when it is recorded and carried into the
+   * step it becomes.
+   *
+   * The editor polls the recording while it runs, so the step list is read many
+   * times over. Minting fresh ids on every read made it a different list each
+   * second: an open form lost the step it was editing, and anything the user did
+   * to the list — a deletion above all — was undone by the next poll.
+   */
+  id: z.string().nullish(),
   kind: z.enum(RECORDED_ACTION_KINDS),
   element: ElementInfoSchema.nullish(),
   url: z.string().nullish(),
@@ -322,7 +332,9 @@ export function actionToStep(
   }
 
   const parsed = StepSchema.safeParse({
-    id: newId(),
+    // The action's own id when it has one, so the same action is the same step
+    // every time the recording is read.
+    id: action.id ?? newId(),
     type,
     name: action.isFinal
       ? `${stepName(action, selector)} (azione finale)`

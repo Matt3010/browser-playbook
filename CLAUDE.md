@@ -271,6 +271,29 @@ These are the classes of defect this codebase actually produced, so look here fi
   attempt against the real site. The list shows what a reference holds, `(vuota)`
   when it holds nothing, dots for a secret; `hasValue` had to be fixed while doing
   it, because it read the length of the *ciphertext* and encrypting "" is not empty.
+- **A list that is polled cannot also be edited.** The recorder page reads the
+  recording every second while it runs, and `buildRecording` minted fresh step ids
+  on every read — so it was a different list each time. The open step form lost
+  the step it was editing and closed by itself (it looked like the mouse doing it;
+  it was the clock), and a deleted step came back on the next poll and could never
+  be removed. Identity is given once now, when the action is recorded, and the
+  poll *merges*: what the recorder recorded wins for a step nobody touched,
+  the user's version wins for one they changed, a deletion is remembered, and
+  steps added by hand stay put.
+- **A repeating workflow needs something new to say.** The site it acts on wants
+  a name it has not seen — a repository, an order reference — so the second run
+  failed with "already exists" and a nightly schedule became a nightly failure.
+  A variable may now hold a formula (`repo-{{timestamp}}`, `{{random:8}}`,
+  `{{uuid}}`), resolved in the runner **once per run**: two steps referring to one
+  variable must type the same text, or a thing is created under one name and
+  looked up under another. Variables only — a password is not something to
+  generate — and only inside a variable's value: `StepSchema` still refuses a
+  placeholder in a step that is not a reference, which is what stops a mistyped
+  `{{secret.password}}` from being typed into a login form. The credentials page
+  lists the tokens without importing the engine, because the browser bundle
+  deliberately holds no workspace package (`@app/shared` carries jwt and bcrypt);
+  an e2e reads the list out of the page and asks the real engine whether it
+  recognises each one, so it cannot drift in silence.
 - **A schedule that repeats is never finished.** Recurring schedules were added
   on top of the one-shot ones, and the runner marked the schedule `completed` when
   its run ended — true for an instant, false for a recurrence: it is due again.

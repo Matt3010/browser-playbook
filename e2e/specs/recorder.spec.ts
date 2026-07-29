@@ -320,6 +320,37 @@ test.describe("recorder action capture", () => {
     }
   });
 
+  test("gives a recorded step the same id every time it is read", async () => {
+    // The editor polls this while recording. Fresh ids on every read mean the
+    // list it holds is a different list each second: an open form loses the step
+    // it was editing, and anything the user did to the list is undone.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, {
+        kind: "fill",
+        selector: "#text-input",
+        value: "ciao"
+      });
+      await client.interact(session.sessionId, { kind: "click", selector: "#real-button" });
+
+      const first = await client.getRecording(session.sessionId);
+      const second = await client.getRecording(session.sessionId);
+
+      expect(first.steps.length).toBeGreaterThan(1);
+      expect(second.steps.map((s) => s.id)).toEqual(first.steps.map((s) => s.id));
+
+      // And a new action does not renumber the ones already there.
+      await client.interact(session.sessionId, { kind: "fill", selector: "#area", value: "nota" });
+      const third = await client.getRecording(session.sessionId);
+      expect(third.steps.slice(0, first.steps.length).map((s) => s.id)).toEqual(
+        first.steps.map((s) => s.id)
+      );
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
   test("records a new tab as a switchPage step and keeps page ids", async () => {
     const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
     try {

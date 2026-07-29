@@ -3,6 +3,26 @@
 import { useEffect, useState } from "react";
 import { api, ApiError, type CredentialEntry } from "@/lib/api";
 
+/**
+ * The tokens a variable may contain, listed for the person typing one.
+ *
+ * Written out here rather than imported: the browser bundle deliberately holds
+ * no workspace package — `@app/shared` carries jwt and bcrypt with it. The list
+ * cannot drift silently for it, though: an e2e reads these very elements and
+ * asks the real engine whether it recognises each one.
+ */
+const FORMULA_TOKENS = [
+  { token: "{{timestamp}}", describes: "20260728-113045" },
+  { token: "{{date}}", describes: "2026-07-28" },
+  { token: "{{time}}", describes: "11:30:45" },
+  { token: "{{random}}", describes: "sei caratteri casuali" },
+  { token: "{{random:10}}", describes: "dieci caratteri casuali" },
+  { token: "{{uuid}}", describes: "un identificatore unico" }
+];
+
+/** Same shape the engine looks for, only to decide whether to show a badge. */
+const FORMULA_RE = /\{\{\s*(timestamp|date|time|uuid|random)(?::[a-zA-Z0-9_-]{1,20})?\s*\}\}/;
+
 export default function CredentialsPage() {
   const [entries, setEntries] = useState<CredentialEntry[]>([]);
   const [name, setName] = useState("");
@@ -110,6 +130,25 @@ export default function CredentialsPage() {
           </label>
         </div>
 
+        {kind === "variable" ? (
+          <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
+            {/* Without this nobody would know the tokens exist, and a repeating
+                workflow would keep failing on a site that wants a new name. */}
+            <p>
+              <span className="font-medium">Formule</span> — una variabile può contenere valori
+              che cambiano a ogni esecuzione, utili quando il sito vuole un nome mai visto:
+            </p>
+            <ul className="mt-1 flex flex-wrap gap-x-4">
+              {FORMULA_TOKENS.map((entry) => (
+                <li key={entry.token}>
+                  <code data-testid="formula-token">{entry.token}</code>{" "}
+                  <span className="text-slate-400">{entry.describes}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         <p className="text-xs text-slate-500">
           Uso nei passaggi:{" "}
           <code>
@@ -183,6 +222,11 @@ export default function CredentialsPage() {
                         ? entry.value
                         : "(vuota)"}
                   </span>
+                  {/* Outside the value: what is stored is the formula, and the
+                      badge must not become part of it when it is read. */}
+                  {entry.kind === "variable" && FORMULA_RE.test(entry.value ?? "") ? (
+                    <span className="badge bg-blue-50 text-blue-700">formula</span>
+                  ) : null}
                   <button
                     className="btn-secondary"
                     onClick={() => edit(entry)}

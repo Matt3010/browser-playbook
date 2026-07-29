@@ -7,6 +7,7 @@ import {
 } from "@app/database";
 import {
   decryptSecret,
+  evaluateFormulas,
   findUnknownPlaceholders,
   maskSecrets,
   type Logger,
@@ -132,6 +133,18 @@ export async function runExecution(
       templates.variables[row.name] = value;
     }
   }
+  /*
+   * Formulas are resolved here, once, before anything is typed.
+   *
+   * A workflow that repeats hits the same wall every time: the site wants a name
+   * it has not seen. `repo-{{timestamp}}` is what makes the second run survive.
+   * Once, because two steps referring to one variable must type the same text —
+   * a repository created under one name and opened under another is two
+   * failures, and the second is the confusing kind.
+   *
+   * Variables only: a password is not something to generate.
+   */
+  templates.variables = evaluateFormulas(templates.variables);
 
   const stepRows = await prisma.workflowStep.findMany({
     where: { workflowId: workflow.id },

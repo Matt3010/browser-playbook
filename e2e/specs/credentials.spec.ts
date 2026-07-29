@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { hasFormula } from "@app/shared";
 import { AppClient, SEED_EMAIL, SEED_PASSWORD } from "../helpers/app-client";
 
 /**
@@ -69,6 +70,28 @@ test.describe("variables and secrets", () => {
     await expect(row).not.toContainText("il-nuovo-segreto");
     const stored = (await client.listCredentials()).find((c) => c.name === name);
     expect(stored).toMatchObject({ value: null, hasValue: true });
+  });
+
+  test("never advertises a formula the engine does not know", async ({ page }) => {
+    // The page lists the tokens without importing the engine — the browser
+    // bundle deliberately holds no workspace package. So the list is checked
+    // against the engine here instead of being trusted.
+    const tokens = await page.getByTestId("formula-token").allInnerTexts();
+    expect(tokens.length, "the help must list something").toBeGreaterThan(0);
+    for (const token of tokens) {
+      expect(hasFormula(token), `${token} is offered but not recognised`).toBe(true);
+    }
+  });
+
+  test("marks a variable that changes at every run", async ({ page }) => {
+    const name = `unico${suffix}`;
+    await client.saveCredential(name, "repo-{{timestamp}}", "variable");
+    await page.reload();
+
+    const row = page.getByTestId(`credential-row-${name}`);
+    await expect(row).toContainText("formula");
+    // What is stored is the formula, not one of its answers.
+    await expect(page.getByTestId(`credential-value-${name}`)).toHaveText("repo-{{timestamp}}");
   });
 
   test("says when a value holds nothing", async ({ page }) => {

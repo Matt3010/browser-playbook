@@ -16,6 +16,7 @@ import {
   type StepVerification,
   type Workflow
 } from "@/lib/api";
+import { mergeRecording } from "@/lib/recording";
 import { StepEditor } from "@/components/StepEditor";
 import { VncViewer, type VncStatus } from "@/components/VncViewer";
 
@@ -81,6 +82,14 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [remoteText, setRemoteText] = useState("");
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /**
+   * What the recorder last handed over, by step id, and what the user has
+   * deleted since. The editor polls the recording while it runs, so without
+   * these two the poll simply undoes whatever was done to the list a second
+   * earlier: a deleted step comes back and can never be removed.
+   */
+  const lastPulledRef = useRef<Map<string, Step>>(new Map());
+  const removedRef = useRef<Set<string>>(new Set());
   // Whether the last poll saw the recording running. The worker stops it by
   // itself when it captures the closing action, so this is what tells a stop the
   // user asked for from one the editor has not seen the actions of yet.
@@ -96,8 +105,21 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
    */
   const pullRecording = useCallback(async (sessionId: string): Promise<RecordingResult> => {
     const recording = await api.get<RecordingResult>(`/sessions/${sessionId}/recording`);
-    setSteps(recording.steps);
-    setVerifications(recording.verifications ?? []);
+    const checks = new Map<string, StepVerification>();
+    recording.steps.forEach((step, index) => {
+      const check = (recording.verifications ?? [])[index];
+      if (check) checks.set(step.id, check);
+    });
+
+    setSteps((local) => {
+      const merged = mergeRecording(recording.steps, local, {
+        lastPulled: lastPulledRef.current,
+        removed: removedRef.current
+      });
+      lastPulledRef.current = new Map(recording.steps.map((step) => [step.id, step]));
+      setVerifications(merged.map((step) => checks.get(step.id) ?? { status: "unchecked" }));
+      return merged;
+    });
     setDirty(true);
     return recording;
   }, []);
@@ -327,6 +349,8 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     if (!session) return;
     await run("clear", async () => {
       await api.del(`/sessions/${session.sessionId}/recording`);
+      lastPulledRef.current = new Map();
+      removedRef.current = new Set();
       setSteps([]);
       setVerifications([]);
       setDirty(true);
@@ -723,6 +747,11 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
             verifications={verifications}
             values={values}
             onChange={(next) => {
+              // What the editor removed has to be remembered, or the next poll
+              // hands it straight back.
+              for (const step of steps) {
+                if (!next.some((kept) => kept.id === step.id)) removedRef.current.add(step.id);
+              }
               setSteps(next);
               setDirty(true);
             }}

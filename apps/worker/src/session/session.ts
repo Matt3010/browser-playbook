@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import { mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
@@ -491,7 +492,10 @@ export class BrowserSession {
   }
 
   private pushAction(action: RecordedAction, page?: Page): void {
-    this.actions.push(action);
+    // Identity is given once, here: the editor reads this list every second
+    // while recording, and a step that changes id between two reads is a step
+    // nothing can refer to — not an open form, not a deletion.
+    this.actions.push({ ...action, id: action.id ?? randomUUID() });
     const index = this.actions.length - 1;
 
     if (page && action.element) {

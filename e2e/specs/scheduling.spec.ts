@@ -273,6 +273,37 @@ test.describe("single future schedule", () => {
     ).toBe(afterCancel);
   });
 
+  test("a formula in a variable makes every run type something new", async () => {
+    // The wall a repeating workflow hits: the site wants a name it has not seen.
+    // Without this the second run fails with "already exists" and the schedule
+    // quietly becomes a nightly failure.
+    const suffix = Date.now();
+    await client.saveCredential(`nomeUnico${suffix}`, `Utente-{{timestamp}}-{{random:4}}`, "variable");
+
+    const workflow = await client.createWorkflow(
+      `Con formula ${suffix}`,
+      `${TEST_WEB_INTERNAL_URL}/wizard/step-1`
+    );
+    await client.putSteps(workflow.id, wizardSteps(`{{variables.nomeUnico${suffix}}}`));
+
+    const before = (await getTestWebState()).wizardSubmissions.length;
+
+    const first = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(first.status, `execution failed: ${first.errorMessage ?? ""}`).toBe("completed");
+    // A second apart, so the timestamp itself has moved on too.
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const second = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(second.status, `execution failed: ${second.errorMessage ?? ""}`).toBe("completed");
+
+    const submissions = (await getTestWebState()).wizardSubmissions.slice(before);
+    expect(submissions).toHaveLength(2);
+    expect(submissions[0].name).toMatch(/^Utente-\d{8}-\d{6}-[a-z0-9]{4}$/);
+    expect(
+      submissions[1].name,
+      "a repeating workflow must not send the same name twice"
+    ).not.toBe(submissions[0].name);
+  });
+
   test("the recurring UI creates a schedule that reads back as a sentence", async ({ page }) => {
     const workflow = await client.createWorkflow(
       `Ricorrente UI ${Date.now()}`,
