@@ -32,7 +32,7 @@ test.describe("step execution", () => {
     await client.login();
   });
 
-  test("executes all fourteen supported step types in one workflow", async () => {
+  test("executes all fifteen supported step types in one workflow", async () => {
     // The delayed button must appear within the waitForElement timeout.
     await configureTestWeb({ delayedButtonMs: 800 });
 
@@ -171,6 +171,13 @@ test.describe("step execution", () => {
         name: "Attendi il pulsante ritardato",
         timeoutMs: 20000,
         selector: sel("id", "delayed-button")
+      }),
+      // read
+      step({
+        type: "read",
+        name: "Leggi il pulsante ritardato",
+        outputName: "pulsante",
+        selector: sel("id", "delayed-button")
       })
     ];
 
@@ -202,6 +209,140 @@ test.describe("step execution", () => {
       expect(messages, `step ${i} must be logged`).toContain(`Step ${i}/${steps.length}`);
     }
     expect(execution.currentUrl).toContain("/errors");
+    expect(execution.outputs ?? []).toHaveLength(1);
+  });
+
+  test("reads several data off the page as the result of one run", async () => {
+    // Until now a run left a picture and an address. What the page actually said
+    // — a balance, a tick, a count — could only be looked at, never compared.
+    const workflow = await client.createWorkflow(
+      `Letture ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` }),
+      step({
+        type: "fill",
+        name: "Scrivi nel campo",
+        value: "Mario Rossi",
+        selector: { strategy: "id", value: "text-input", fallback: null, pageId: "main", frame: null }
+      }),
+      step({
+        type: "check",
+        name: "Accetta i termini",
+        selector: { strategy: "id", value: "accept", fallback: null, pageId: "main", frame: null }
+      }),
+      step({
+        type: "read",
+        name: "Leggi il campo",
+        outputName: "nome",
+        selector: { strategy: "id", value: "text-input", fallback: null, pageId: "main", frame: null }
+      }),
+      step({
+        type: "read",
+        name: "Leggi la spunta",
+        outputName: "accettato",
+        selector: { strategy: "id", value: "accept", fallback: null, pageId: "main", frame: null }
+      }),
+      step({
+        type: "read",
+        name: "Leggi la scelta",
+        outputName: "taglia",
+        selector: { strategy: "id", value: "size-result", fallback: null, pageId: "main", frame: null }
+      })
+    ]);
+
+    const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(execution.status, `execution failed: ${execution.errorMessage ?? ""}`).toBe("completed");
+
+    const outputs = execution.outputs ?? [];
+    expect(outputs, "one row per read, in the order they were read").toHaveLength(3);
+
+    const byName = new Map(outputs.map((o) => [o.name, o]));
+    // A field gives up its value, whatever the step before it typed there.
+    expect(byName.get("nome")).toMatchObject({ raw: "Mario Rossi", kind: "text" });
+    // A tick is a state, not the word "true" found somewhere on the page.
+    expect(byName.get("accettato")).toMatchObject({ kind: "boolean", boolean: true });
+    // Anything else is read for what it says.
+    expect(byName.get("taglia")).toMatchObject({ raw: "13inch", kind: "text" });
+  });
+
+  test("recognises a number, and keeps the text it was written as", async () => {
+    const workflow = await client.createWorkflow(
+      `Lettura numerica ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/checkout`
+    );
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai al checkout", value: `${TEST_WEB_INTERNAL_URL}/checkout` }),
+      step({
+        type: "read",
+        name: "Leggi gli ordini registrati",
+        outputName: "ordini",
+        selector: { strategy: "id", value: "order-count", fallback: null, pageId: "main", frame: null }
+      })
+    ]);
+
+    const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(execution.status, `execution failed: ${execution.errorMessage ?? ""}`).toBe("completed");
+    const output = execution.outputs?.[0];
+    // How many orders the fake site has taken depends on what ran before, so what
+    // is asserted is the interpretation: the text is kept as it stood, and the
+    // number beside it is that same text read as a number.
+    expect(output).toMatchObject({ name: "ordini", kind: "number" });
+    expect(output?.raw).toMatch(/^\d+$/);
+    expect(output?.number).toBe(Number(output?.raw));
+  });
+
+  test("a read that finds nothing stops the run, like every other step", async () => {
+    const workflow = await client.createWorkflow(
+      `Lettura impossibile ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    const missing = step({
+      type: "read",
+      name: "Leggi qualcosa che non c'è",
+      outputName: "fantasma",
+      selector: { strategy: "id", value: "non-esiste", fallback: null, pageId: "main", frame: null }
+    });
+    await client.putSteps(workflow.id, [step({ type: "goto", name: "Vai agli elementi", value: `${TEST_WEB_INTERNAL_URL}/elements` }), missing]);
+
+    const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(execution.status).toBe("failed");
+    expect(execution.failedStepId).toBe(missing.id);
+    expect(execution.outputs ?? []).toHaveLength(0);
+  });
+
+  test("refuses to read a password field back into the open", async () => {
+    // A secret is stored so that nothing has to show it. Reading the field it
+    // was typed into would hand it back in clear as a result.
+    const workflow = await client.createWorkflow(
+      `Lettura password ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/login`
+    );
+    const forbidden = step({
+      type: "read",
+      name: "Leggi la password",
+      outputName: "password_in_chiaro",
+      selector: { strategy: "id", value: "password", fallback: null, pageId: "main", frame: null }
+    });
+    await client.putSteps(workflow.id, [
+      step({ type: "goto", name: "Vai al login", value: `${TEST_WEB_INTERNAL_URL}/login` }),
+      step({
+        type: "fill",
+        name: "Scrivi la password",
+        value: "TestPassword123!",
+        selector: { strategy: "id", value: "password", fallback: null, pageId: "main", frame: null }
+      }),
+      forbidden
+    ]);
+
+    const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(execution.status).toBe("failed");
+    expect(execution.failedStepId).toBe(forbidden.id);
+    expect(execution.errorMessage ?? "").toMatch(/password/i);
+    expect(execution.outputs ?? []).toHaveLength(0);
+    // And nothing anywhere carries the value itself.
+    expect(JSON.stringify(execution)).not.toContain("TestPassword123!");
   });
 
   test("checks a radio that is hidden underneath its own label", async () => {

@@ -16,7 +16,8 @@ export const STEP_TYPES = [
   "assertText",
   "switchPage",
   "download",
-  "upload"
+  "upload",
+  "read"
 ] as const;
 
 export type StepType = (typeof STEP_TYPES)[number];
@@ -32,7 +33,8 @@ export const SELECTOR_REQUIRED_TYPES: StepType[] = [
   "assertVisible",
   "assertText",
   "download",
-  "upload"
+  "upload",
+  "read"
 ];
 
 /** Step types that must carry a value (possibly a template). */
@@ -69,6 +71,18 @@ export const StepSchema = z
     timeoutMs: z.number().int().min(100).max(120000).default(10000),
     enabled: z.boolean().default(true),
     /**
+     * The name a `read` step files its result under.
+     *
+     * Its own field rather than `value`: `value` is a template — it is rendered,
+     * checked for unknown placeholders, and shown in the editor as the thing a
+     * step would type. A name is none of those.
+     */
+    outputName: z
+      .string()
+      .regex(/^[a-zA-Z][a-zA-Z0-9_]*$/, "outputName may only contain letters, digits and underscores")
+      .max(100)
+      .nullish(),
+    /**
      * A closing action that was recorded without being performed: the recorder
      * captured the interaction and suppressed it, so nothing happened on the site
      * while recording. It runs only when the workflow runs.
@@ -79,6 +93,20 @@ export const StepSchema = z
     isFinal: z.boolean().default(false)
   })
   .superRefine((step, ctx) => {
+    if (step.type === "read" && !step.outputName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["outputName"],
+        message: "step type 'read' requires an output name: it is how the result is referred to"
+      });
+    }
+    if (step.type !== "read" && step.outputName) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["outputName"],
+        message: `only a 'read' step may carry an output name, not '${step.type}'`
+      });
+    }
     if (SELECTOR_REQUIRED_TYPES.includes(step.type) && !step.selector) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -169,6 +197,7 @@ export function validateSteps(input: unknown): StepValidationResult {
     // `enabled` look disabled and slip past the invariant.
     const parsed = input.map((step) => StepSchema.parse(step));
     errors.push(...validateFinalStepPlacement(parsed));
+    errors.push(...validateUniqueOutputNames(parsed));
   }
   return { valid: errors.length === 0, errors };
 }
@@ -204,6 +233,30 @@ export function validateFinalStepPlacement(steps: Step[]): string[] {
   return errors;
 }
 
+/**
+ * Two live reads may not file their results under one name.
+ *
+ * A workflow may read as many things as it likes — that is the point — but two
+ * results called the same thing cannot be told apart afterwards by anything: not
+ * a comparison, not a notification, not a person reading the list. A disabled
+ * read does not conflict: it produces nothing.
+ */
+export function validateUniqueOutputNames(steps: Step[]): string[] {
+  const errors: string[] = [];
+  const seen = new Set<string>();
+  for (const step of steps) {
+    if (step.type !== "read" || !step.enabled || !step.outputName) continue;
+    if (seen.has(step.outputName)) {
+      errors.push(
+        `two enabled steps read into '${step.outputName}': give one of them another name`
+      );
+      continue;
+    }
+    seen.add(step.outputName);
+  }
+  return errors;
+}
+
 /** The closing action of a step list, when it has one. */
 export function findFinalStep(steps: Step[]): Step | undefined {
   return steps.find((s) => s.isFinal);
@@ -212,4 +265,64 @@ export function findFinalStep(steps: Step[]): Step | undefined {
 /** A workflow is runnable only when it has at least one enabled step. */
 export function isRunnableStepList(steps: Step[]): boolean {
   return steps.some((s) => s.enabled);
+}
+
+/**
+ * The shape a step has in the database.
+ *
+ * Five places used to translate between a row and a `Step` by hand — two in the
+ * workflow routes, one in the clone route, one where an execution re-parses the
+ * steps, one in the worker. A field added to the schema and forgotten in one of
+ * them disappears on that path alone, silently, which is the first defect class
+ * this codebase ever produced. There is one translation now.
+ */
+export interface StepRow {
+  id: string;
+  type: string;
+  name: string;
+  pageId: string;
+  pageOrigin: string | null;
+  selectorJson: unknown;
+  valueTemplate: string | null;
+  outputName: string | null;
+  timeoutMs: number;
+  enabled: boolean;
+  isFinal: boolean;
+}
+
+export function stepFromRow(row: StepRow): Step {
+  return StepSchema.parse({
+    id: row.id,
+    type: row.type,
+    name: row.name,
+    pageId: row.pageId,
+    pageOrigin: row.pageOrigin,
+    selector: row.selectorJson ?? null,
+    value: row.valueTemplate,
+    outputName: row.outputName,
+    timeoutMs: row.timeoutMs,
+    enabled: row.enabled,
+    isFinal: row.isFinal
+  });
+}
+
+/** The same translation the other way, for writing a step back to its row. */
+export function stepToRow(step: Step, position: number): Omit<StepRow, "selectorJson"> & {
+  position: number;
+  selectorJson: unknown;
+} {
+  return {
+    id: step.id,
+    position,
+    type: step.type,
+    name: step.name,
+    pageId: step.pageId,
+    pageOrigin: step.pageOrigin ?? null,
+    selectorJson: (step.selector ?? null) as unknown,
+    valueTemplate: step.value ?? null,
+    outputName: step.outputName ?? null,
+    timeoutMs: step.timeoutMs,
+    enabled: step.enabled,
+    isFinal: step.isFinal
+  };
 }

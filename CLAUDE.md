@@ -387,6 +387,23 @@ These are the classes of defect this codebase actually produced, so look here fi
   is held, and a session that had ended was kept: it offered "Chiudi browser" for
   a browser that had already closed, with no way back but a reload. A poll that
   sees `closed`/`error`, or a 404, drops it.
+- **A new field crosses every hand-written mapping there is.** Adding `outputName`
+  to a step meant touching `rowToStep` in the API, the `create` of `PUT /steps`,
+  the `create` of `/clone`, the inline `StepSchema.parse` in `POST /executions`
+  and `rowToStep` in the worker — five copies of the same translation, and a field
+  that misses one of them disappears in silence on exactly that path (the first
+  class in this list). They are now one shared pair, `stepFromRow`/`stepToRow` in
+  `packages/workflow-schema`, so the next field is declared once.
+- **Reading a datum must not change it, and must not expose it.** A `read` step is
+  armed like the closing action — the click is swallowed, so clicking a checkbox to
+  read its state does not tick it — but it closes nothing and the recording carries
+  on. Two things it is deliberately refused: a password field, at capture *and* at
+  execution, because a secret coming back as a stored result defeats the point of
+  storing it encrypted; and a guess about what a number means — `12,300` is
+  ambiguous between two conventions, so it stays text, and `Sì` never becomes
+  `true`. `raw` is always kept, because the interpretation can be wrong and the
+  text on the page cannot. What the masking touches, the interpretation loses with
+  it: masking the text and leaving `1234` beside it would give the secret away.
 
 ### Things a test cannot pin down
 

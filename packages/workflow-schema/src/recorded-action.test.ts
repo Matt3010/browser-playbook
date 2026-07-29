@@ -508,3 +508,64 @@ describe("the origin a step was recorded against", () => {
     expect(result!.step.pageOrigin).toBeNull();
   });
 });
+
+describe("recording a read", () => {
+  const element = (partial: Record<string, unknown> = {}) => ({
+    tag: "span",
+    label: "Saldo disponibile",
+    text: "1.234,56",
+    id: "saldo",
+    unique: { id: true },
+    ...partial
+  });
+
+  it("becomes a read step that names what it read", () => {
+    const converted = actionToStep({
+      kind: "read",
+      element: element(),
+      pageId: "main",
+      timestamp: Date.now()
+    } as never);
+
+    expect(converted).not.toBeNull();
+    expect(converted!.step.type).toBe("read");
+    expect(converted!.step.outputName).toBe("saldo_disponibile");
+    // A read types nothing, so it carries no value.
+    expect(converted!.step.value).toBeNull();
+  });
+
+  it("is skipped when no selector can name the element, like every other action", () => {
+    const converted = actionToStep({
+      kind: "read",
+      element: element({ id: null, label: null, text: null, unique: {} }),
+      pageId: "main",
+      timestamp: Date.now()
+    } as never);
+    expect(converted).toBeNull();
+  });
+
+  it("refuses to read a password field", () => {
+    // A secret must not come back in clear through a result. The refusal is here
+    // as well as at run time, because a step can also be written by hand.
+    const converted = actionToStep({
+      kind: "read",
+      element: element({ tag: "input", type: "password", label: "Password" }),
+      pageId: "main",
+      timestamp: Date.now()
+    } as never);
+    expect(converted).toBeNull();
+  });
+
+  it("gives a second read of the same label a name of its own", () => {
+    // Several reads are the point; two results under one name are not.
+    const action = (id: string) => ({
+      kind: "read" as const,
+      element: element({ id, unique: { id: true } }),
+      pageId: "main",
+      timestamp: Date.now()
+    });
+    const result = actionsToSteps([action("uno"), action("due")] as never);
+    const names = result.steps.map((s) => s.outputName);
+    expect(names).toEqual(["saldo_disponibile", "saldo_disponibile_2"]);
+  });
+});

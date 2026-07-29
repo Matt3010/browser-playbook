@@ -408,6 +408,7 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     // an element, the panel covers the page being worked on.
     tooltip: false,
     armedFinal: false,
+    armedRead: false,
     lastEmitAt: 0
   };
 
@@ -426,7 +427,7 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     document.addEventListener(
       type,
       (event) => {
-        if (!state.armedFinal) return;
+        if (!state.armedFinal && !state.armedRead) return;
         const target = event.target as Element | null;
         if (!isInstrumented(target)) return;
         swallow(event);
@@ -485,6 +486,15 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
       const target = event.target as Element | null;
       if (!isInstrumented(target)) return;
       const el = target as Element;
+
+      // Armed read: take the datum and leave the page exactly as it was. Clicking
+      // a checkbox to read it must not tick it, and the recording carries on.
+      if (state.armedRead) {
+        swallow(event);
+        state.armedRead = false;
+        emit({ kind: "read", element: describe(el) });
+        return;
+      }
 
       // Armed closing action: record it and make sure the page never sees it.
       if (state.armedFinal) {
@@ -610,11 +620,13 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     highlight: boolean;
     tooltip?: boolean;
     armedFinal?: boolean;
+    armedRead?: boolean;
   }): void {
     state.recording = !!next.recording;
     state.highlight = !!next.highlight;
     state.tooltip = !!next.tooltip;
     state.armedFinal = !!next.armedFinal;
+    state.armedRead = !!next.armedRead;
     setHighlight(state.highlight);
     if (!state.tooltip) hideTooltip();
   }

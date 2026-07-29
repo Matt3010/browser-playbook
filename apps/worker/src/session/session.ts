@@ -86,6 +86,12 @@ export class BrowserSession {
   /** Armed to capture the next interaction without letting the page perform it. */
   armedFinal = false;
   /**
+   * Armed to read the next element clicked instead of acting on it. Like the
+   * closing action the click is swallowed, so the page is left as it was; unlike
+   * it, nothing is closed and the recording carries on.
+   */
+  armedRead = false;
+  /**
    * The panel that describes the element under the pointer, drawn inside the
    * page itself. Off unless asked for: it covers the very page the user is
    * working on, and the same information is on the "selected element" panel.
@@ -235,7 +241,8 @@ export class BrowserSession {
       recording: this.recording,
       highlight: this.highlight,
       tooltip: this.tooltip,
-      armedFinal: this.armedFinal
+      armedFinal: this.armedFinal,
+      armedRead: this.armedRead
     }));
     // The tooltip asks Node which selector would be recorded instead of deciding
     // again in the page: one implementation, so the proposal cannot drift from what
@@ -502,6 +509,15 @@ export class BrowserSession {
       void this.verifyAction(index, action, page);
     }
 
+    if (action.kind === "read" && this.armedRead) {
+      // The page disarmed itself when it captured the click; this keeps the
+      // worker's own copy — which the toolbar reads — in step with it. Recording
+      // is deliberately left running: a read closes nothing.
+      this.armedRead = false;
+      void this.applyConfigToAllPages().catch(() => undefined);
+      this.log.info("Captured a read without letting the page see the click");
+    }
+
     if (action.isFinal) {
       // The closing action has been captured: nothing may follow it, so disarm and
       // stop recording straight away.
@@ -527,7 +543,26 @@ export class BrowserSession {
     if (enabled && !this.recording) {
       throw new Error("Start recording before arming the closing action");
     }
+    if (enabled && this.armedRead) {
+      throw new Error("A read is already armed; disarm it before arming the closing action");
+    }
     this.armedFinal = enabled;
+    await this.applyConfigToAllPages();
+  }
+
+  /**
+   * Arms a read. The next interaction in the page is recorded as a `read` step
+   * and suppressed, so looking at a datum never changes it: clicking a checkbox
+   * to read it must not tick it.
+   */
+  async setArmedRead(enabled: boolean): Promise<void> {
+    if (enabled && !this.recording) {
+      throw new Error("Start recording before arming a read");
+    }
+    if (enabled && this.armedFinal) {
+      throw new Error("The closing action is already armed; disarm it before arming a read");
+    }
+    this.armedRead = enabled;
     await this.applyConfigToAllPages();
   }
 
@@ -587,7 +622,8 @@ export class BrowserSession {
       recording: this.recording,
       highlight: this.highlight,
       tooltip: this.tooltip,
-      armedFinal: this.armedFinal
+      armedFinal: this.armedFinal,
+      armedRead: this.armedRead
     };
     try {
       for (const frame of page.frames()) {
@@ -647,6 +683,7 @@ export class BrowserSession {
     this.actions.length = 0;
     this.verifications.clear();
     this.armedFinal = false;
+    this.armedRead = false;
     void this.applyConfigToAllPages().catch(() => undefined);
   }
 

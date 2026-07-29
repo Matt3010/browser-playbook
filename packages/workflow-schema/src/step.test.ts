@@ -5,6 +5,7 @@ import {
   validateStep,
   validateSteps,
   validateFinalStepPlacement,
+  validateUniqueOutputNames,
   findFinalStep,
   isRunnableStepList,
   type Step
@@ -257,5 +258,86 @@ describe("placeholders that are not references", () => {
 
   it("leaves a plain value alone", () => {
     expect(validateSteps([fill("TestPassword123!")]).valid).toBe(true);
+  });
+});
+
+describe("a step that reads a datum from the page", () => {
+  const read = (partial: Record<string, unknown> = {}) =>
+    step({ type: "read", selector: labelSelector, outputName: "saldo", ...partial });
+
+  it("accepts one that names what it reads", () => {
+    expect(validateStep(read())).toEqual({ valid: true, errors: [] });
+  });
+
+  it("needs an element to read", () => {
+    const result = validateStep(read({ selector: null }));
+    expect(result.valid).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/selector/i);
+  });
+
+  it("needs a name, because the name is how anything refers to it later", () => {
+    const result = validateStep(read({ outputName: undefined }));
+    expect(result.valid).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/name/i);
+  });
+
+  it("refuses a name that could not be referred to", () => {
+    for (const name of ["saldo totale", "2saldo", "{{saldo}}", "sal-do", ""]) {
+      expect(validateStep(read({ outputName: name })).valid, name).toBe(false);
+    }
+  });
+
+  it("accepts the shapes a reference can have", () => {
+    for (const name of ["saldo", "numero_ordine", "a1", "Totale_2"]) {
+      expect(validateStep(read({ outputName: name })).valid, name).toBe(true);
+    }
+  });
+
+  it("does not need a value: a read writes one rather than typing one", () => {
+    expect(validateStep(read({ value: null })).valid).toBe(true);
+  });
+
+  it("refuses an output name on a step that does not read", () => {
+    // The field means something only where it applies; a copied step must not
+    // become a silent carrier of somebody else's name.
+    const result = validateStep(
+      step({ type: "click", selector: labelSelector, outputName: "saldo" })
+    );
+    expect(result.valid).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/read/i);
+  });
+});
+
+describe("validateUniqueOutputNames", () => {
+  const read = (outputName: string, enabled = true): Step =>
+    StepSchema.parse(
+      step({ type: "read", selector: labelSelector, outputName, enabled })
+    );
+
+  it("accepts several reads, which is the point of having them", () => {
+    expect(
+      validateUniqueOutputNames([read("saldo"), read("numero_ordine"), read("stato")])
+    ).toEqual([]);
+  });
+
+  it("refuses two live reads under one name", () => {
+    // Two results called the same thing cannot be told apart by anything that
+    // comes later — a comparison, a notification, a person.
+    const errors = validateUniqueOutputNames([read("saldo"), read("saldo")]);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/saldo/);
+  });
+
+  it("lets a disabled read keep a name a live one uses", () => {
+    expect(validateUniqueOutputNames([read("saldo"), read("saldo", false)])).toEqual([]);
+  });
+
+  it("is part of what validateSteps refuses", () => {
+    const result = validateSteps([
+      step({ type: "read", selector: labelSelector, outputName: "saldo" }),
+      step({ type: "read", selector: labelSelector, outputName: "saldo" })
+    ]);
+    expect(result.valid).toBe(false);
+    expect(result.errors.join(" ")).toMatch(/saldo/);
   });
 });

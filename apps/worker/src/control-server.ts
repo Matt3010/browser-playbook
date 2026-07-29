@@ -121,6 +121,18 @@ export async function buildControlServer(
     return describe(session);
   });
 
+  app.post<{ Params: { id: string } }>("/sessions/:id/arm-read", async (request, reply) => {
+    const parsed = ToggleSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
+    const session = sessions.get(request.params.id);
+    try {
+      await session.setArmedRead(parsed.data.enabled);
+    } catch (err) {
+      return reply.code(409).send({ error: (err as Error).message });
+    }
+    return describe(session);
+  });
+
   app.post<{ Params: { id: string } }>("/sessions/:id/tooltip", async (request, reply) => {
     const parsed = ToggleSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
@@ -228,6 +240,7 @@ function describe(session: {
   recording: boolean;
   highlight: boolean;
   armedFinal: boolean;
+  armedRead: boolean;
   tooltip: boolean;
   currentUrl: string | null;
   error: string | null;
@@ -243,6 +256,7 @@ function describe(session: {
     recording: session.recording,
     highlight: session.highlight,
     armedFinal: session.armedFinal,
+    armedRead: session.armedRead,
     tooltip: session.tooltip,
     currentUrl: session.currentUrl,
     pages: session.listPages(),

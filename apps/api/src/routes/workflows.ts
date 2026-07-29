@@ -3,7 +3,14 @@ import path from "path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { assertSafeTargetUrl, encryptSecret, extractTemplateRefs } from "@app/shared";
-import { StepSchema, validateSteps, isRunnableStepList, type Step } from "@app/workflow-schema";
+import {
+  StepSchema,
+  validateSteps,
+  isRunnableStepList,
+  stepFromRow,
+  stepToRow,
+  type Step
+} from "@app/workflow-schema";
 import { requireAuth, currentUser } from "../auth";
 import { loadOwnedWorkflow } from "../ownership";
 
@@ -23,32 +30,6 @@ const PutStepsSchema = z.object({
 });
 
 /** Converts a DB row into the JSON step shape used by the API and the runner. */
-function rowToStep(row: {
-  id: string;
-  type: string;
-  name: string;
-  pageId: string;
-  pageOrigin: string | null;
-  selectorJson: unknown;
-  valueTemplate: string | null;
-  timeoutMs: number;
-  enabled: boolean;
-  isFinal: boolean;
-}): Step {
-  return StepSchema.parse({
-    id: row.id,
-    type: row.type,
-    name: row.name,
-    pageId: row.pageId,
-    pageOrigin: row.pageOrigin,
-    selector: row.selectorJson ?? null,
-    value: row.valueTemplate,
-    timeoutMs: row.timeoutMs,
-    enabled: row.enabled,
-    isFinal: row.isFinal
-  });
-}
-
 export async function workflowRoutes(app: FastifyInstance): Promise<void> {
   app.addHook("preHandler", requireAuth);
 
@@ -100,7 +81,7 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
       where: { workflowId: workflow.id },
       orderBy: { position: "asc" }
     });
-    return { ...workflow, steps: steps.map(rowToStep) };
+    return { ...workflow, steps: steps.map(stepFromRow) };
   });
 
   app.patch<{ Params: { id: string } }>("/:id", async (request, reply) => {
@@ -145,6 +126,7 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
         startUrl: workflow.startUrl,
         status: workflow.status,
         steps: {
+          // The copy carries every column but the identity: new ids, same content.
           create: steps.map((step) => ({
             position: step.position,
             type: step.type,
@@ -153,6 +135,7 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
             pageOrigin: step.pageOrigin,
             selectorJson: (step.selectorJson ?? null) as never,
             valueTemplate: step.valueTemplate,
+            outputName: step.outputName,
             timeoutMs: step.timeoutMs,
             enabled: step.enabled,
             isFinal: step.isFinal
@@ -201,7 +184,7 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
       where: { workflowId: workflow.id },
       orderBy: { position: "asc" }
     });
-    return steps.map(rowToStep);
+    return steps.map(stepFromRow);
   });
 
   /**
@@ -260,18 +243,9 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
       app.prisma.workflowStep.deleteMany({ where: { workflowId: workflow.id } }),
       app.prisma.workflowStep.createMany({
         data: steps.map((step, index) => ({
-          id: step.id,
+          ...stepToRow(step, index),
           workflowId: workflow.id,
-          position: index,
-          type: step.type,
-          name: step.name,
-          pageId: step.pageId,
-          pageOrigin: step.pageOrigin ?? null,
-          selectorJson: (step.selector ?? null) as never,
-          valueTemplate: step.value ?? null,
-          timeoutMs: step.timeoutMs,
-          enabled: step.enabled,
-          isFinal: step.isFinal
+          selectorJson: (step.selector ?? null) as never
         }))
       }),
       app.prisma.workflow.update({
@@ -284,7 +258,7 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
       where: { workflowId: workflow.id },
       orderBy: { position: "asc" }
     });
-    return saved.map(rowToStep);
+    return saved.map(stepFromRow);
   });
 }
 

@@ -102,6 +102,67 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
     await page.getByTestId("close-session").click();
   });
 
+  test("arms a read, takes the datum without touching the page, and keeps recording", async ({
+    page
+  }) => {
+    // A run used to leave a picture and an address. Reading a datum is armed the
+    // same way the closing action is — the click is swallowed, so nothing on the
+    // site moves — but unlike the closing action it closes nothing: the recording
+    // carries on afterwards.
+    await loginThroughUi(page);
+
+    const workflow = await client.createWorkflow(
+      `Lettura dalla UI ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    const sessionId = await startSession(page, workflow.id);
+
+    await page.getByTestId("record").click();
+    await expect(page.getByTestId("recording-state")).toContainText("attiva");
+
+    await page.getByTestId("arm-read").click();
+    await expect(page.getByTestId("arm-read")).toContainText("Armata");
+    // Two armings at once would leave the injected script deciding which wins.
+    await expect(page.getByTestId("arm-final")).toBeDisabled();
+
+    // The checkbox is clicked in the remote browser. Armed, it is read and left
+    // exactly as it was: a tick would be a change to the site nobody asked for.
+    await client.interact(sessionId, { kind: "click", selector: "#accept" });
+
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(2, { timeout: 30_000 });
+    await expect(page.getByTestId("step-list")).toContainText("Leggi");
+    await expect(page.getByTestId("arm-read")).not.toContainText("Armata");
+
+    const recorded = await client.getRecording(sessionId);
+    const read = recorded.steps.find((s) => s.type === "read");
+    expect(read, "the armed click must be recorded as a read").toBeTruthy();
+    expect(read!.outputName).toBe("accetto_i_termini");
+    expect(
+      recorded.steps.some((s) => s.type === "check" || s.type === "click"),
+      "the page must not have seen the click"
+    ).toBe(false);
+
+    // Recording continues: reading a datum does not close anything.
+    await expect(page.getByTestId("recording-state")).toContainText("attiva");
+    await client.interact(sessionId, { kind: "fill", selector: "#text-input", value: "dopo" });
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(3, { timeout: 30_000 });
+
+    await page.getByTestId("stop-recording").click();
+    await page.getByTestId("save-steps").click();
+    await expect(page.getByTestId("unsaved-changes")).toBeHidden({ timeout: 30_000 });
+    await page.getByTestId("close-session").click();
+
+    // And what the run reads is shown where the run is read about.
+    const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(execution.status, `execution failed: ${execution.errorMessage ?? ""}`).toBe("completed");
+
+    await page.goto(`/executions/${execution.id}`);
+    const outputs = page.getByTestId("execution-outputs");
+    await expect(outputs).toBeVisible();
+    await expect(outputs).toContainText("accetto_i_termini");
+    await expect(outputs).toContainText("falso");
+  });
+
   test("changing the start URL does not throw away unsaved steps", async ({ page }) => {
     // Steps that are not saved yet exist only in the editor. Starting the browser
     // after changing the start URL reloaded the workflow to pick up the new URL,
@@ -196,6 +257,51 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
     await expect
       .poll(async () => (await client.getRecording(sessionId)).steps.some((s) => s.type === "press"))
       .toBe(true);
+
+    await page.getByTestId("close-session").click();
+  });
+
+  test("typing in the toolbar leaves the remote page alone until Scrivi is pressed", async ({
+    page
+  }) => {
+    // Reported from the running instance: a search panel open in the remote
+    // browser disappears while typing into the toolbar field on this side. The
+    // fixture panel closes the way a real one does — on the window losing focus,
+    // and on the focus leaving it — and reports every closure, so if anything
+    // here reaches the remote page it says so.
+    await loginThroughUi(page);
+    const workflow = await client.createWorkflow(
+      `Pannello aperto ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/overlay`
+    );
+    const sessionId = await startSession(page, workflow.id);
+
+    const events = async () => (await getTestWebState()).overlayEvents.map((e) => e.event);
+    const closures = async () => (await events()).filter((e) => !e.startsWith("saw:") && e !== "opened");
+
+    await client.interact(sessionId, { kind: "click", selector: "#open-search" });
+    await expect.poll(async () => (await events()).includes("opened"), { timeout: 30_000 }).toBe(true);
+
+    // Real keystrokes in the toolbar field, one at a time, exactly as a person
+    // types them — `fill` would set the value in one go and prove nothing.
+    await page.getByTestId("type-text").pressSequentially("cerca questo", { delay: 30 });
+    await page.waitForTimeout(2000);
+
+    // The fixture also writes down every event it receives, so a failure here
+    // names what reached the page instead of only saying that something did.
+    expect(
+      await closures(),
+      "typing on this side must not disturb the page on the other side"
+    ).toEqual([]);
+
+    // And when Scrivi is pressed the text goes where the panel is, which is the
+    // whole point of the field: the panel is still open to receive it.
+    await page.getByTestId("type-send").click();
+    await expect
+      .poll(async () => (await client.getSession(sessionId)).state, { timeout: 30_000 })
+      .toMatch(/ready|running/);
+    expect(await closures(), "and the panel is still there to receive it").toEqual([]);
+    expect(await events(), "the keystrokes reach the page only now").toContain("saw:keydown");
 
     await page.getByTestId("close-session").click();
   });

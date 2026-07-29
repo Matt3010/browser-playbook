@@ -79,7 +79,8 @@ export async function buildTestWeb(): Promise<FastifyInstance> {
       uploads: state.uploads,
       orders: state.orders,
       loginAttempts: state.loginAttempts,
-      panelClicks: state.panelClicks
+      panelClicks: state.panelClicks,
+      overlayEvents: state.overlayEvents
     };
   });
 
@@ -267,6 +268,73 @@ ${error ? `<p class="error" data-testid="login-error">${escapeHtml(error)}</p>` 
 ${summary}`
       )
     );
+  });
+
+  // ---- a panel that closes the way a real site's search panel closes -------
+
+  /**
+   * A search panel that opens on a click, focuses its own field, and closes when
+   * the window loses focus or when the focus leaves it. That is how the panels on
+   * real sites behave, and it is what makes them a good witness: if anything on
+   * the app's side reaches the remote page while the user types into the toolbar
+   * on this side, the panel closes and says so.
+   */
+  app.get("/overlay", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Pannello - test-web",
+        `
+<h1>Pannello di ricerca</h1>
+<button id="open-search" type="button">Cerca</button>
+<div id="panel" hidden>
+  <label for="panel-input">Cerca nel sito</label>
+  <input id="panel-input" type="search" placeholder="Cerca nel sito">
+</div>
+<p>Stato pannello: <span id="panel-state" data-testid="panel-state">chiuso</span></p>
+<script>
+  var panel = document.getElementById("panel");
+  var label = document.getElementById("panel-state");
+  function report(event) {
+    label.textContent = event === "opened" ? "aperto" : "chiuso";
+    fetch("/overlay/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ event: event })
+    });
+  }
+  function close(reason) {
+    if (panel.hidden) return;
+    panel.hidden = true;
+    report(reason);
+  }
+  document.getElementById("open-search").addEventListener("click", function () {
+    panel.hidden = false;
+    document.getElementById("panel-input").focus();
+    report("opened");
+  });
+  window.addEventListener("blur", function () { close("window-blur"); });
+  panel.addEventListener("focusout", function (event) {
+    if (!panel.contains(event.relatedTarget)) close("focusout");
+  });
+  // Everything else the page receives is written down too, without closing
+  // anything: when the panel does close, this is what says why.
+  ["keydown", "mousedown", "pointerdown", "visibilitychange", "resize", "scroll"].forEach(
+    function (type) {
+      window.addEventListener(type, function () { report("saw:" + type); }, true);
+    }
+  );
+</script>`
+      )
+    )
+  );
+
+  app.post("/overlay/event", async (request) => {
+    const body = (request.body ?? {}) as { event?: unknown };
+    getState().overlayEvents.push({
+      event: typeof body.event === "string" ? body.event : "unknown",
+      at: new Date().toISOString()
+    });
+    return { ok: true };
   });
 
   // ---- 17.4 interactive elements -----------------------------------------

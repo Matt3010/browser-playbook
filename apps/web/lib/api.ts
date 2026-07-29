@@ -74,6 +74,8 @@ export interface Step {
   enabled: boolean;
   /** Recorded without being performed; must stay the last enabled step. */
   isFinal: boolean;
+  /** Only on a `read` step: the name its result is filed under. */
+  outputName?: string | null;
 }
 
 export interface Workflow {
@@ -103,6 +105,20 @@ export interface Execution {
   workflow?: { id: string; name: string };
   logs?: ExecutionLog[];
   artifacts?: Artifact[];
+  /** What the run read off the page, one row per `read` step. */
+  outputs?: ExecutionOutput[];
+}
+
+export interface ExecutionOutput {
+  id: string;
+  stepId: string | null;
+  name: string;
+  /** The text as it stood on the page, kept whatever the interpretation says. */
+  raw: string;
+  kind: "text" | "number" | "boolean";
+  number: number | null;
+  boolean: boolean | null;
+  createdAt: string;
 }
 
 export interface ExecutionLog {
@@ -171,6 +187,8 @@ export interface SessionInfo {
   /** The description panel that follows the pointer inside the stream. */
   tooltip?: boolean;
   armedFinal?: boolean;
+  /** Armed to read the next element clicked instead of acting on it. */
+  armedRead?: boolean;
   pages?: Array<{ pageId: string; url: string; active: boolean }>;
   error?: string | null;
   expiresAt?: string;

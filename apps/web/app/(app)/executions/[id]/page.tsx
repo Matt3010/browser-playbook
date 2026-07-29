@@ -1,7 +1,13 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { api, ApiError, type Execution, type ExecutionLog } from "@/lib/api";
+import {
+  api,
+  ApiError,
+  type Execution,
+  type ExecutionLog,
+  type ExecutionOutput
+} from "@/lib/api";
 import { VncViewer } from "@/components/VncViewer";
 
 const STATUS_STYLE: Record<string, string> = {
@@ -14,6 +20,17 @@ const STATUS_STYLE: Record<string, string> = {
 };
 
 const TERMINAL = ["completed", "failed", "cancelled"];
+
+/**
+ * What to show for a datum the run read. A tick has no text of its own — `raw`
+ * holds "true"/"false", which is what the machine calls it — so it is named in
+ * the language the rest of the page is written in. Everything else is shown as
+ * it stood on the page: the interpretation can be wrong, the text cannot.
+ */
+function describeOutput(output: ExecutionOutput): string {
+  if (output.kind === "boolean") return output.boolean ? "vero" : "falso";
+  return output.raw === "" ? "(vuoto)" : output.raw;
+}
 
 export default function ExecutionDetailPage({ params }: { params: { id: string } }) {
   const executionId = params.id;
@@ -117,6 +134,7 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
 
   const screenshots = (execution.artifacts ?? []).filter((a) => a.type === "screenshot");
   const downloads = (execution.artifacts ?? []).filter((a) => a.type === "download");
+  const outputs = execution.outputs ?? [];
 
   return (
     <div className="space-y-4" data-testid="execution-detail">
@@ -204,6 +222,26 @@ export default function ExecutionDetailPage({ params }: { params: { id: string }
                 .join("\n")}
         </pre>
       </section>
+
+      {outputs.length > 0 ? (
+        <section className="card">
+          {/* What the run read off the page. The text is shown as it stood there —
+              it is the only thing that cannot be wrong — with the interpretation
+              beside it. */}
+          <h2 className="mb-2 font-medium">Dati letti</h2>
+          <table className="w-full text-sm" data-testid="execution-outputs">
+            <tbody>
+              {outputs.map((output) => (
+                <tr key={output.id} className="border-b border-slate-100 last:border-0">
+                  <td className="py-1 pr-3 font-medium">{output.name}</td>
+                  <td className="py-1 pr-3">{describeOutput(output)}</td>
+                  <td className="py-1 text-right text-xs text-slate-500">{output.kind}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
 
       {vncPath ? (
         <section className="card overflow-hidden p-0" data-testid="execution-stream">

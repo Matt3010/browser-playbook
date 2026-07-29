@@ -159,6 +159,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
           highlight: info.highlight,
           tooltip: info.tooltip ?? false,
           armedFinal: info.armedFinal ?? false,
+          armedRead: info.armedRead ?? false,
           pages: info.pages ?? [],
           error: info.error ?? null,
           expiresAt: info.expiresAt
@@ -206,6 +207,24 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
       try {
         await loadOwnedSession(userId, request.params.id);
         return await app.worker.setArmedFinal(request.params.id, parsed.data.enabled);
+      } catch (err) {
+        const status = err instanceof WorkerHttpError ? err.statusCode : 503;
+        return reply.code(status).send({ error: (err as Error).message });
+      }
+    });
+
+    /**
+     * Arms a read: the next interaction in the page is recorded as a `read` step
+     * and suppressed, so looking at a datum never changes it. Unlike the closing
+     * action it closes nothing, and the recording carries on.
+     */
+    scoped.post<{ Params: { id: string } }>("/:id/arm-read", async (request, reply) => {
+      const { userId } = currentUser(request);
+      const parsed = ToggleSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: "enabled must be a boolean" });
+      try {
+        await loadOwnedSession(userId, request.params.id);
+        return await app.worker.setArmedRead(request.params.id, parsed.data.enabled);
       } catch (err) {
         const status = err instanceof WorkerHttpError ? err.statusCode : 503;
         return reply.code(status).send({ error: (err as Error).message });

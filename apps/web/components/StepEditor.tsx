@@ -3,6 +3,13 @@
 import { useState } from "react";
 import type { CredentialEntry, Selector, Step, StepVerification } from "@/lib/api";
 
+/*
+ * The step types, copied rather than imported: the browser bundle deliberately
+ * holds no workspace package (`@app/workflow-schema` pulls zod and, through it,
+ * server-only code). A copy can drift — offering a type the server refuses, or
+ * hiding one it accepts — so an e2e reads these very options and compares them
+ * with the real list.
+ */
 const STEP_TYPES = [
   "goto",
   "click",
@@ -17,7 +24,8 @@ const STEP_TYPES = [
   "assertText",
   "switchPage",
   "download",
-  "upload"
+  "upload",
+  "read"
 ] as const;
 
 const SELECTOR_STRATEGIES = [
@@ -128,7 +136,9 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
   const editing = editingIndex >= 0 ? steps[editingIndex] : null;
 
   function update(id: string, patch: Partial<Step>) {
-    onChange(steps.map((step) => (step.id === id ? { ...step, ...patch } : step)));
+    onChange(
+      steps.map((step) => (step.id === id ? withConsistentOutputName({ ...step, ...patch }) : step))
+    );
   }
 
   function updateSelector(id: string, patch: Partial<Selector>) {
@@ -169,6 +179,33 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
   function toggleFrom(index: number) {
     const enabled = !steps[index]?.enabled;
     onChange(steps.map((step, i) => (i >= index ? { ...step, enabled } : step)));
+  }
+
+  /**
+   * A result name belongs to a `read` and to nothing else: the server requires it
+   * on one and refuses it on the other. Changing the type in the form has to keep
+   * that true, or Save answers "Invalid steps" for a field the user cannot see.
+   */
+  function withConsistentOutputName(step: Step): Step {
+    if (step.type === "read") {
+      return step.outputName ? step : { ...step, outputName: "valore" };
+    }
+    return step.outputName ? { ...step, outputName: null } : step;
+  }
+
+  function addRead() {
+    insert({
+      id: newId(),
+      type: "read",
+      name: "Leggi un dato",
+      pageId: "main",
+      selector: { strategy: "text", value: "", fallback: null, pageId: "main", frame: null },
+      value: null,
+      outputName: "valore",
+      timeoutMs: 10000,
+      enabled: true,
+      isFinal: false
+    });
   }
 
   function addWait() {
@@ -213,6 +250,9 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
         </button>
         <button className="btn-secondary" onClick={addAssertion} data-testid="add-assertion">
           + Assertion
+        </button>
+        <button className="btn-secondary" onClick={addRead} data-testid="add-read">
+          + Leggi
         </button>
       </div>
 
@@ -403,6 +443,7 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
                     className="input"
                     value={editing.type}
                     onChange={(e) => update(editing.id, { type: e.target.value })}
+                    data-testid={`step-type-select-${editingIndex}`}
                   >
                     {STEP_TYPES.map((type) => (
                       <option key={type} value={type}>
@@ -414,18 +455,33 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
               </div>
 
               <div className="grid grid-cols-2 gap-2">
-                <label className="block">
-                  <span className="text-xs text-slate-600">Valore</span>
-                  <input
-                    className="input"
-                    value={editingValue ? editing.value ?? "" : describeValue(editing.value, values)}
-                    onFocus={() => setEditingValue(true)}
-                    onBlur={() => setEditingValue(false)}
-                    onChange={(e) => update(editing.id, { value: e.target.value })}
-                    placeholder="{{credentials.password}}"
-                    data-testid={`step-value-input-${editingIndex}`}
-                  />
-                </label>
+                {editing.type === "read" ? (
+                  // A read carries no value: what it needs is the name its result
+                  // is filed under, which is how a comparison will refer to it.
+                  <label className="block">
+                    <span className="text-xs text-slate-600">Nome del risultato</span>
+                    <input
+                      className="input"
+                      value={editing.outputName ?? ""}
+                      onChange={(e) => update(editing.id, { outputName: e.target.value })}
+                      placeholder="saldo"
+                      data-testid={`step-output-name-input-${editingIndex}`}
+                    />
+                  </label>
+                ) : (
+                  <label className="block">
+                    <span className="text-xs text-slate-600">Valore</span>
+                    <input
+                      className="input"
+                      value={editingValue ? editing.value ?? "" : describeValue(editing.value, values)}
+                      onFocus={() => setEditingValue(true)}
+                      onBlur={() => setEditingValue(false)}
+                      onChange={(e) => update(editing.id, { value: e.target.value })}
+                      placeholder="{{credentials.password}}"
+                      data-testid={`step-value-input-${editingIndex}`}
+                    />
+                  </label>
+                )}
                 <label className="block">
                   <span className="text-xs text-slate-600">Timeout (ms)</span>
                   <input

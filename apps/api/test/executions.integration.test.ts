@@ -8,6 +8,7 @@ import {
   createWorkflow,
   gotoStep,
   clickStep,
+  stepId,
   type TestContext,
   type AuthedUser
 } from "./helpers";
@@ -723,5 +724,144 @@ describe("cancelling an execution", () => {
       where: { executionId: execution.id }
     });
     expect(logs.some((l) => /cancelled/i.test(l.message))).toBe(true);
+  });
+});
+
+describe("what a run read from the page", () => {
+  it("returns the values a run recorded, in the order it read them", async () => {
+    const workflow = await readyWorkflow();
+    const execution = await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, status: "completed" }
+    });
+    await ctx.prisma.executionOutput.create({
+      data: {
+        executionId: execution.id,
+        name: "saldo",
+        raw: "€ 1.234,56",
+        kind: "number",
+        number: 1234.56
+      }
+    });
+    await ctx.prisma.executionOutput.create({
+      data: {
+        executionId: execution.id,
+        name: "accettato",
+        raw: "true",
+        kind: "boolean",
+        boolean: true
+      }
+    });
+
+    const response = await ctx.app.inject({
+      method: "GET",
+      url: `/api/executions/${execution.id}`,
+      headers: { cookie: user.cookie }
+    });
+
+    expect(response.statusCode).toBe(200);
+    const outputs = response.json().outputs;
+    expect(outputs).toHaveLength(2);
+    expect(outputs[0]).toMatchObject({ name: "saldo", raw: "€ 1.234,56", kind: "number" });
+    expect(outputs[1]).toMatchObject({ name: "accettato", kind: "boolean", boolean: true });
+  });
+
+  it("says nothing at all when a run read nothing", async () => {
+    const workflow = await readyWorkflow();
+    const execution = await ctx.prisma.execution.create({
+      data: { workflowId: workflow.id, status: "completed" }
+    });
+
+    const response = await ctx.app.inject({
+      method: "GET",
+      url: `/api/executions/${execution.id}`,
+      headers: { cookie: user.cookie }
+    });
+    expect(response.json().outputs).toEqual([]);
+  });
+
+  it("refuses to save a read step that names nothing", async () => {
+    const workflow = await createWorkflow(ctx.app, user.cookie, "Legge senza nome");
+    const response = await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: {
+        steps: [
+          gotoStep("http://test-web:3001/elements"),
+          {
+            id: stepId(),
+            type: "read",
+            name: "Leggi il saldo",
+            pageId: "main",
+            selector: { strategy: "id", value: "saldo", fallback: null, pageId: "main", frame: null },
+            value: null,
+            timeoutMs: 10000,
+            enabled: true
+          }
+        ]
+      }
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.stringify(response.json())).toMatch(/output name/i);
+  });
+
+  it("refuses two live reads filing under one name", async () => {
+    const workflow = await createWorkflow(ctx.app, user.cookie, "Due letture uguali");
+    const read = (outputName: string) => ({
+      id: stepId(),
+      type: "read",
+      name: `Leggi ${outputName}`,
+      pageId: "main",
+      selector: { strategy: "id", value: "saldo", fallback: null, pageId: "main", frame: null },
+      value: null,
+      outputName,
+      timeoutMs: 10000,
+      enabled: true
+    });
+
+    const response = await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: { steps: [gotoStep("http://test-web:3001/elements"), read("saldo"), read("saldo")] }
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.stringify(response.json())).toMatch(/saldo/);
+  });
+
+  it("keeps the output name through save and read back", async () => {
+    // A new field crosses several hand-written row mappings; if one drops it,
+    // it vanishes silently on that path alone.
+    const workflow = await createWorkflow(ctx.app, user.cookie, "Legge il saldo");
+    const saved = await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: {
+        steps: [
+          gotoStep("http://test-web:3001/elements"),
+          {
+            id: stepId(),
+            type: "read",
+            name: "Leggi il saldo",
+            pageId: "main",
+            selector: { strategy: "id", value: "saldo", fallback: null, pageId: "main", frame: null },
+            value: null,
+            outputName: "saldo",
+            timeoutMs: 10000,
+            enabled: true
+          }
+        ]
+      }
+    });
+    expect(saved.statusCode).toBe(200);
+    expect(saved.json()[1].outputName).toBe("saldo");
+
+    const reread = await ctx.app.inject({
+      method: "GET",
+      url: `/api/workflows/${workflow.id}`,
+      headers: { cookie: user.cookie }
+    });
+    expect(reread.json().steps[1].outputName).toBe("saldo");
   });
 });

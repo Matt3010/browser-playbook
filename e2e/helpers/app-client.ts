@@ -19,6 +19,7 @@ export interface Step {
   pageId: string;
   selector: Record<string, unknown> | null;
   value: string | null;
+  outputName?: string | null;
   timeoutMs: number;
   enabled: boolean;
   isFinal?: boolean;
@@ -35,6 +36,15 @@ export interface Execution {
   durationMs?: number | null;
   logs?: Array<{ id: string; level: string; message: string; stepId: string | null }>;
   artifacts?: Array<{ id: string; type: string; path: string }>;
+  /** What the run read off the page, one entry per read step. */
+  outputs?: Array<{
+    id: string;
+    name: string;
+    raw: string;
+    kind: string;
+    number: number | null;
+    boolean: boolean | null;
+  }>;
 }
 
 export class AppClient {
@@ -306,6 +316,8 @@ export interface TestWebState {
   loginAttempts: number;
   /** Which origin a panel action landed in, so a test can tell the tabs apart. */
   panelClicks: Array<{ origin: string; at: string }>;
+  /** What happened to the search panel on /overlay: opened, and why it closed. */
+  overlayEvents: Array<{ event: string; at: string }>;
 }
 
 export async function resetTestWeb(): Promise<void> {

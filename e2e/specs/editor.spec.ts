@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { STEP_TYPES } from "@app/workflow-schema";
 import {
   AppClient,
   TEST_WEB_INTERNAL_URL,
@@ -92,6 +93,20 @@ test.describe("visual step editor", () => {
     await expect(page.getByTestId("step-type-1")).toHaveText("fill");
     await expect(page.getByTestId("step-type-2")).toHaveText("click");
     await expect(page.getByTestId("step-name-1")).toHaveText("Inserisci Nome");
+  });
+
+  test("offers every step type the server knows, and no other", async ({ page }) => {
+    // The editor keeps its own copy of the list, because the browser bundle
+    // deliberately holds no workspace package. A copy that drifts offers a type
+    // the server refuses, or hides one it accepts — so it is checked here
+    // against the real list rather than trusted.
+    await page.getByTestId("step-edit-1").click();
+    const offered = await page
+      .getByTestId("step-type-select-1")
+      .evaluate((select) =>
+        [...(select as HTMLSelectElement).options].map((option) => option.value)
+      );
+    expect(offered.sort()).toEqual([...STEP_TYPES].sort());
   });
 
   test("renames the workflow itself", async ({ page }) => {

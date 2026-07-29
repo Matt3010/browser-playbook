@@ -707,6 +707,40 @@ test.describe("closing action captured without being performed", () => {
     }
   });
 
+  test("refuses to arm a read and a closing action at the same time", async () => {
+    // Two armings at once would leave the injected script deciding which of them
+    // the next click belongs to, which is exactly the kind of guess this product
+    // refuses everywhere else. The UI disables the other button; the server has
+    // to refuse anyway, because the UI is not the only way in.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/elements`);
+    try {
+      const early = await client.request("POST", `/api/sessions/${session.sessionId}/arm-read`, {
+        enabled: true
+      });
+      expect(early.status, "arming outside a recording makes no sense").toBe(409);
+
+      await client.setRecording(session.sessionId, true);
+      await client.armFinal(session.sessionId, true);
+
+      const both = await client.request("POST", `/api/sessions/${session.sessionId}/arm-read`, {
+        enabled: true
+      });
+      expect(both.status).toBe(409);
+      expect(both.text).toMatch(/closing action/i);
+
+      // And the other way round, which is a separate branch in the session.
+      await client.armFinal(session.sessionId, false);
+      await client.request("POST", `/api/sessions/${session.sessionId}/arm-read`, { enabled: true });
+      const final = await client.request("POST", `/api/sessions/${session.sessionId}/arm-final`, {
+        enabled: true
+      });
+      expect(final.status).toBe(409);
+      expect(final.text).toMatch(/read is already armed/i);
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
   test("the API refuses to save a closing action that is not last", async () => {
     const workflow = await client.createWorkflow(
       `Closing action fuori posto ${Date.now()}`,

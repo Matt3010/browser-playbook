@@ -4,7 +4,7 @@ import path from "path";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { signSessionToken } from "@app/shared";
-import { isRunnableStepList, StepSchema } from "@app/workflow-schema";
+import { isRunnableStepList, stepFromRow } from "@app/workflow-schema";
 import { requireAuth, currentUser } from "../auth";
 import { referenceState, unresolvedReferences } from "../references";
 import { loadOwnedWorkflow, loadOwnedExecution } from "../ownership";
@@ -30,20 +30,7 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
       where: { workflowId: workflow.id },
       orderBy: { position: "asc" }
     });
-    const steps = stepRows.map((row) =>
-      StepSchema.parse({
-        id: row.id,
-        type: row.type,
-        name: row.name,
-        pageId: row.pageId,
-        pageOrigin: row.pageOrigin,
-        selector: row.selectorJson ?? null,
-        value: row.valueTemplate,
-        timeoutMs: row.timeoutMs,
-        enabled: row.enabled,
-        isFinal: row.isFinal
-      })
-    );
+    const steps = stepRows.map(stepFromRow);
     if (!isRunnableStepList(steps)) {
       return reply.code(409).send({ error: "Workflow has no enabled steps to run" });
     }
@@ -235,18 +222,23 @@ export async function executionRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>("/executions/:id", async (request) => {
     const { userId } = currentUser(request);
     const execution = await loadOwnedExecution(app, userId, request.params.id);
-    const [logs, artifacts] = await Promise.all([
+    const [logs, artifacts, outputs] = await Promise.all([
       app.prisma.executionLog.findMany({
         where: { executionId: execution.id },
         orderBy: { createdAt: "asc" }
       }),
-      app.prisma.artifact.findMany({ where: { executionId: execution.id } })
+      app.prisma.artifact.findMany({ where: { executionId: execution.id } }),
+      // What the run read off the page, in the order it read it.
+      app.prisma.executionOutput.findMany({
+        where: { executionId: execution.id },
+        orderBy: { createdAt: "asc" }
+      })
     ]);
     const durationMs =
       execution.startedAt && execution.finishedAt
         ? execution.finishedAt.getTime() - execution.startedAt.getTime()
         : null;
-    return { ...execution, durationMs, logs, artifacts };
+    return { ...execution, durationMs, logs, artifacts, outputs };
   });
 
   /**

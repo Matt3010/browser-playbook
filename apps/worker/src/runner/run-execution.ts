@@ -18,7 +18,7 @@ import {
   describeMissingReferences,
   findEmptyReferences,
   findMissingReferences,
-  StepSchema,
+  stepFromRow,
   type Step
 } from "@app/workflow-schema";
 import type { WorkerConfig } from "../config";
@@ -47,32 +47,6 @@ export interface RunExecutionResult {
   status: "completed" | "failed";
   failedStepId?: string | null;
   errorMessage?: string | null;
-}
-
-function rowToStep(row: {
-  id: string;
-  type: string;
-  name: string;
-  pageId: string;
-  pageOrigin: string | null;
-  selectorJson: unknown;
-  valueTemplate: string | null;
-  timeoutMs: number;
-  enabled: boolean;
-  isFinal: boolean;
-}): Step {
-  return StepSchema.parse({
-    id: row.id,
-    type: row.type,
-    name: row.name,
-    pageId: row.pageId,
-    pageOrigin: row.pageOrigin,
-    selector: row.selectorJson ?? null,
-    value: row.valueTemplate,
-    timeoutMs: row.timeoutMs,
-    enabled: row.enabled,
-    isFinal: row.isFinal
-  });
 }
 
 /**
@@ -150,7 +124,7 @@ export async function runExecution(
     where: { workflowId: workflow.id },
     orderBy: { position: "asc" }
   });
-  const steps = stepRows.map(rowToStep).filter((s) => s.enabled);
+  const steps = stepRows.map(stepFromRow).filter((s) => s.enabled);
 
   const executionDir = path.join(config.artifactDir, input.executionId);
   await mkdir(executionDir, { recursive: true });
@@ -278,6 +252,11 @@ export async function runExecution(
       data: { status: "running", currentUrl: session.currentUrl }
     });
 
+    // What the run read, in the order it read it: the completion notification
+    // carries it, which is where a workflow running at three in the morning
+    // becomes useful without opening the app.
+    const readValues: string[] = [];
+
     const ctx: StepExecutionContext = {
       session,
       templates,
@@ -297,6 +276,27 @@ export async function runExecution(
             path: artifact.path
           }
         });
+      },
+      onOutput: async (output) => {
+        // What was read is stored as it stood on the page — except that a page can
+        // be showing a secret this workflow typed into it, and a result is read back
+        // in clear. It goes through the same masking as the log messages, and if the
+        // masking changed anything the interpreted number goes with it: masking the
+        // text and keeping `1234` next to it would give the secret away anyway.
+        const raw = safe(output.raw);
+        const masked = raw !== output.raw;
+        await prisma.executionOutput.create({
+          data: {
+            executionId: input.executionId,
+            stepId: output.stepId,
+            name: output.name,
+            raw,
+            kind: masked ? "text" : output.kind,
+            number: masked ? null : output.number,
+            boolean: masked ? null : output.boolean
+          }
+        });
+        readValues.push(`${output.name}: ${raw}`);
       },
       log: (level, message) => writeLog(level, message)
     };
@@ -371,7 +371,9 @@ export async function runExecution(
         userId: input.userId,
         type: "workflow_completed",
         title: "Workflow completato",
-        message: `Il workflow "${workflow.name}" è terminato con successo in ${totalMs} ms.`
+        message:
+          `Il workflow "${workflow.name}" è terminato con successo in ${totalMs} ms.` +
+          (readValues.length > 0 ? ` Dati letti — ${readValues.join(", ")}.` : "")
       },
       (err) => log.warn({ err }, "Notification delivery failed")
     );

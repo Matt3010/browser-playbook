@@ -43,6 +43,13 @@ export interface TestState {
    * on the tab it meant to rather than on one that merely shares its number.
    */
   panelClicks: Array<{ origin: string; at: string }>;
+  /**
+   * What happened to the search panel on /overlay, in order. A real site closes
+   * a panel like that when the window loses focus or the focus leaves it, so this
+   * is how a test can tell whether anything on our side disturbed the remote page
+   * while the user was typing on this side.
+   */
+  overlayEvents: Array<{ event: string; at: string }>;
   /** Partial wizard data between step 1 and step 2, keyed by session id. */
   wizardDrafts: Record<string, { name: string; email: string }>;
 }
@@ -65,6 +72,7 @@ function freshState(): TestState {
     orders: [],
     loginAttempts: 0,
     panelClicks: [],
+    overlayEvents: [],
     wizardDrafts: {}
   };
 }

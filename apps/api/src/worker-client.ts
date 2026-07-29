@@ -11,6 +11,7 @@ export interface WorkerSessionInfo {
   highlight: boolean;
   tooltip?: boolean;
   armedFinal?: boolean;
+  armedRead?: boolean;
   currentUrl?: string | null;
   pages?: Array<{ pageId: string; url: string; active: boolean }>;
   error?: string | null;
@@ -107,6 +108,10 @@ export class WorkerClient {
 
   setArmedFinal(sessionId: string, enabled: boolean): Promise<WorkerSessionInfo> {
     return this.call("POST", `/sessions/${sessionId}/arm-final`, { enabled });
+  }
+
+  setArmedRead(sessionId: string, enabled: boolean): Promise<WorkerSessionInfo> {
+    return this.call("POST", `/sessions/${sessionId}/arm-read`, { enabled });
   }
 
   setHighlight(sessionId: string, enabled: boolean): Promise<WorkerSessionInfo> {

@@ -345,6 +345,27 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     });
   }
 
+  /**
+   * Arms a read. The next thing clicked in the remote browser is recorded as a
+   * step that reads it — the value of a field, the state of a tick, the text of
+   * anything else — and the click never reaches the page, so looking at a datum
+   * cannot change it. Unlike the closing action it closes nothing: the recording
+   * carries on afterwards.
+   */
+  async function armRead() {
+    if (!session) return;
+    await run("arm-read", async () => {
+      const next = !session.armedRead;
+      await api.post(`/sessions/${session.sessionId}/arm-read`, { enabled: next });
+      setSession({ ...session, armedRead: next });
+      log(
+        next
+          ? "Lettura armata: il prossimo click verra letto, non eseguito"
+          : "Lettura disarmata"
+      );
+    });
+  }
+
   /** Discards everything recorded so far, unlocking recording again. */
   async function clearRecording() {
     if (!session) return;
@@ -355,7 +376,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
       setSteps([]);
       setVerifications([]);
       setDirty(true);
-      setSession({ ...session, armedFinal: false, recording: false });
+      setSession({ ...session, armedFinal: false, armedRead: false, recording: false });
       log("Registrazione azzerata");
     });
   }
@@ -724,11 +745,20 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
             <button
               className={session.armedFinal ? "btn-danger" : "btn-secondary"}
               onClick={armFinalAction}
-              disabled={busy !== null || !session.recording}
+              disabled={busy !== null || !session.recording || !!session.armedRead}
               title="Registra l'ultima azione senza eseguirla: verra eseguita solo all'avvio del workflow"
               data-testid="arm-final"
             >
               {session.armedFinal ? "Armata: clicca il bottone finale" : "Azione finale"}
+            </button>
+            <button
+              className={session.armedRead ? "btn-danger" : "btn-secondary"}
+              onClick={armRead}
+              disabled={busy !== null || !session.recording || !!session.armedFinal}
+              title="Registra la lettura di un dato: il prossimo click viene letto, non eseguito"
+              data-testid="arm-read"
+            >
+              {session.armedRead ? "Armata: clicca il dato da leggere" : "Leggi valore"}
             </button>
             <button
               className="btn-secondary"

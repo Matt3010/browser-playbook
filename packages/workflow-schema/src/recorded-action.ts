@@ -21,7 +21,8 @@ export const RECORDED_ACTION_KINDS = [
   "switchTab",
   "download",
   "upload",
-  "wait"
+  "wait",
+  "read"
 ] as const;
 
 export type RecordedActionKind = (typeof RECORDED_ACTION_KINDS)[number];
@@ -93,7 +94,8 @@ const KIND_TO_STEP_TYPE: Record<RecordedActionKind, StepType | null> = {
   switchTab: "switchPage",
   download: "download",
   upload: "upload",
-  wait: "wait"
+  wait: "wait",
+  read: "read"
 };
 
 /**
@@ -152,6 +154,20 @@ function labelFor(element: ElementInfo | null | undefined): string {
   );
 }
 
+/**
+ * The name a read files its result under, proposed from what the element is
+ * called. It is only a proposal: the editor can change it, and two reads under
+ * one name are refused by `validateUniqueOutputNames`.
+ */
+export function outputNameFromElement(element: ElementInfo | null | undefined): string {
+  return slugify(labelFor(element)) || "valore";
+}
+
+/** A field whose content is a secret must never come back as a result. */
+function readsASecret(element: ElementInfo | null | undefined): boolean {
+  return (element?.type ?? "").toLowerCase() === "password";
+}
+
 function stepName(action: RecordedAction, selector: Selector | null): string {
   const target = labelFor(action.element) || (selector ? describeSelector(selector) : "elemento");
   switch (action.kind) {
@@ -180,6 +196,8 @@ function stepName(action: RecordedAction, selector: Selector | null): string {
       return `Carica file su ${target}`;
     case "wait":
       return `Attendi ${action.value ?? 0} ms`;
+    case "read":
+      return `Leggi ${target}`;
     default:
       return "Step";
   }
@@ -284,9 +302,21 @@ export function actionToStep(
     });
   }
 
-  const needsSelector = ["click", "fill", "select", "check", "uncheck", "download", "upload"].includes(
-    type
-  );
+  // Reading a password field would put a secret back in clear as a result, so the
+  // action is dropped here as well as refused at run time: a step can also be
+  // written by hand, and a step recorded is a step that will run.
+  if (action.kind === "read" && readsASecret(action.element)) return null;
+
+  const needsSelector = [
+    "click",
+    "fill",
+    "select",
+    "check",
+    "uncheck",
+    "download",
+    "upload",
+    "read"
+  ].includes(type);
   if (needsSelector && !selector) {
     return null;
   }
@@ -340,6 +370,7 @@ export function actionToStep(
       ? `${stepName(action, selector)} (azione finale)`
       : stepName(action, selector),
     pageId: action.pageId,
+    outputName: action.kind === "read" ? outputNameFromElement(action.element) : undefined,
     // Which document this was recorded against, so the runner can tell a tab from
     // another one that merely inherited its number. about:blank and anything
     // unparseable carry no identity and are left out.
@@ -400,6 +431,20 @@ export function actionsToSteps(
       continue;
     }
     const { step, credential } = converted;
+
+    // Two reads of the same label would propose the same name, and two results
+    // under one name cannot be told apart afterwards. Only this loop sees the
+    // whole list, so this is where the second one gets a name of its own.
+    if (step.type === "read" && step.outputName) {
+      const taken = new Set(
+        steps.filter((s) => s.type === "read" && s.outputName).map((s) => s.outputName as string)
+      );
+      if (taken.has(step.outputName)) {
+        let suffix = 2;
+        while (taken.has(`${step.outputName}_${suffix}`)) suffix += 1;
+        step.outputName = `${step.outputName}_${suffix}`;
+      }
+    }
 
     const previous = steps[steps.length - 1];
     if (

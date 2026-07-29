@@ -1,7 +1,12 @@
 import path from "path";
 import type { Locator, Page } from "playwright";
 import { assertSafeTargetUrl, renderTemplate, type TemplateContext } from "@app/shared";
-import type { Step } from "@app/workflow-schema";
+import {
+  classifyReadKind,
+  classifyReadValue,
+  type ReadValueType,
+  type Step
+} from "@app/workflow-schema";
 import { resolveUnique } from "./locator";
 import { assertSafeLandedUrl, gotoTolerantOfRedirects } from "./navigation";
 import { safeDownloadPath } from "./artifact-path";
@@ -24,6 +29,15 @@ export interface StepExecutionContext {
   expectedTabCount: number;
   /** Called for artifacts produced by a step (e.g. a downloaded file). */
   onArtifact: (artifact: { type: string; path: string }) => Promise<void>;
+  /** Called for a datum a `read` step took off the page, which is a result of the run. */
+  onOutput: (output: {
+    stepId: string;
+    name: string;
+    raw: string;
+    kind: ReadValueType;
+    number: number | null;
+    boolean: boolean | null;
+  }) => Promise<void>;
   log: (level: "info" | "warn" | "error", message: string) => Promise<void>;
 }
 
@@ -297,6 +311,59 @@ export async function executeStep(step: Step, ctx: StepExecutionContext): Promis
         throw new StepExecutionError(`Upload path '${requested}' is outside the fixture directory`);
       }
       await locator.setInputFiles(resolved, { timeout: step.timeoutMs });
+      return;
+    }
+
+    case "read": {
+      // The name is guaranteed by the schema; asserting it here keeps the failure
+      // readable if a row ever arrives from somewhere that skipped validation.
+      if (!step.outputName) {
+        throw new StepExecutionError(`Step '${step.name}' has no name for its result`);
+      }
+      const locator = await locatorFor(step, ctx);
+
+      // One round-trip: what the element is, and everything it could be read as.
+      // Deciding here rather than in three separate calls also avoids asking a
+      // <div> for an input value, which Playwright refuses outright.
+      const element = await locator.evaluate(
+        (node) => {
+          const el = node as HTMLElement & { value?: unknown; checked?: unknown };
+          return {
+            tag: el.tagName,
+            type: el.getAttribute("type"),
+            value: typeof el.value === "string" ? el.value : "",
+            checked: el.checked === true,
+            text: el.textContent ?? ""
+          };
+        },
+        undefined,
+        { timeout: step.timeoutMs }
+      );
+
+      // A secret must not come back into the open through a read. The recorder
+      // already refuses to capture one; this covers a step written by hand in the
+      // editor, which the capture never saw.
+      if (element.tag.toLowerCase() === "input" && (element.type ?? "").toLowerCase() === "password") {
+        throw new StepExecutionError(
+          `Step '${step.name}' reads a password field. A secret is never read back into ` +
+            `the open: the result would be stored and shown in clear.`
+        );
+      }
+
+      const kind = classifyReadKind(element.tag, element.type);
+      const read =
+        kind === "checked" ? element.checked : kind === "value" ? element.value : element.text;
+      const classified = classifyReadValue(kind, read);
+
+      await ctx.onOutput({
+        stepId: step.id,
+        name: step.outputName,
+        raw: classified.raw,
+        kind: classified.kind,
+        number: classified.number,
+        boolean: classified.boolean
+      });
+      await ctx.log("info", `Letto '${step.outputName}': ${classified.raw} (${classified.kind})`);
       return;
     }
 
