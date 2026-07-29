@@ -312,7 +312,11 @@ These are the classes of defect this codebase actually produced, so look here fi
   its count on the first of each month. The sentence shown to the user has to
   mean that, which is why it is derived from the same table as the expression.
   The control matters as much: the hourly minute was a clock face labelled
-  "Minuto", so a 15 typed into it became the hour and the minute stayed nought.
+  "Minuto", so a 15 typed into it became the hour and the minute stayed nought —
+  and the interval accepted `0,5`, previewing "ogni 0.5 ore" for a schedule cron
+  cannot express, leaving the refusal to the server after the click. A form that
+  can describe something the server will reject has to say so before the click,
+  and point at what the user actually wanted: half an hour is 30 minutes.
 - **A schedule that repeats is never finished.** Recurring schedules were added
   on top of the one-shot ones, and the runner marked the schedule `completed` when
   its run ended — true for an instant, false for a recurrence: it is due again.

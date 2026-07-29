@@ -97,6 +97,12 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   /** The repeating schedule being composed: what the user picks, not a cron line. */
   const [repeatKind, setRepeatKind] = useState<Recurrence["kind"]>("days");
   const [repeatTime, setRepeatTime] = useState("03:00");
+  /**
+   * The largest interval each unit accepts. Cron counts in whole units inside
+   * the next one up: 59 minutes, 23 hours, 30 days, 12 months.
+   */
+  const REPEAT_MAX: Record<string, number> = { minutes: 59, hours: 23, days: 30, months: 12 };
+
   /** Minute of the hour for an hourly schedule, and the gap for one in minutes. */
   const [repeatMinute, setRepeatMinute] = useState(0);
   const [repeatEvery, setRepeatEvery] = useState(1);
@@ -514,6 +520,26 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   }
 
   /** Builds the recurrence out of the fields the form shows for the chosen kind. */
+  /**
+   * Why this interval cannot be scheduled, or null when it can.
+   *
+   * Cron steps are whole numbers — there is no every-half-hour — and the form
+   * used to accept one anyway, show a sentence that cannot exist, and leave the
+   * refusal to the server after the click. Half an hour does have a home, so the
+   * message says which one.
+   */
+  function intervalProblem(): string | null {
+    if (repeatKind === "weekly") return null;
+    if (!Number.isInteger(repeatEvery)) {
+      return "Solo numeri interi: per la mezz'ora scegli Minuti e metti 30.";
+    }
+    const max = REPEAT_MAX[repeatKind] ?? 1;
+    if (repeatEvery < 1 || repeatEvery > max) {
+      return `Un intervallo va da 1 a ${max}.`;
+    }
+    return null;
+  }
+
   function currentRecurrence(): Recurrence {
     switch (repeatKind) {
       case "minutes":
@@ -936,7 +962,8 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
                 className="input w-24"
                 type="number"
                 min={1}
-                max={repeatKind === "minutes" ? 59 : repeatKind === "hours" ? 23 : repeatKind === "days" ? 30 : 12}
+                max={REPEAT_MAX[repeatKind] ?? 1}
+                step={1}
                 value={repeatEvery}
                 onChange={(e) => setRepeatEvery(Number(e.target.value))}
                 data-testid="repeat-every"
@@ -978,14 +1005,20 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           <button
             className="btn"
             onClick={scheduleRecurring}
-            disabled={busy !== null}
+            disabled={busy !== null || intervalProblem() !== null}
             data-testid="repeat-submit"
           >
             Pianifica ricorrente
           </button>
-          <span className="text-xs text-slate-500" data-testid="repeat-preview">
-            {describeRecurrence(currentRecurrence())}
-          </span>
+          {intervalProblem() ? (
+            <span className="text-xs text-red-700" data-testid="repeat-error">
+              {intervalProblem()}
+            </span>
+          ) : (
+            <span className="text-xs text-slate-500" data-testid="repeat-preview">
+              {describeRecurrence(currentRecurrence())}
+            </span>
+          )}
         </div>
       </div>
 

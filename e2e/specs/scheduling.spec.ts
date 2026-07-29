@@ -400,6 +400,39 @@ test.describe("single future schedule", () => {
     );
   });
 
+  test("refuses half an hour, and says where the half hour lives", async ({ page }) => {
+    // Cron steps are whole numbers: there is no such thing as every 0.5 hours.
+    // The form used to accept it and show a sentence that cannot exist, leaving
+    // the refusal to the server after the click.
+    const workflow = await client.createWorkflow(
+      `Mezz'ora ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [gotoStep(`${TEST_WEB_INTERNAL_URL}/elements`)]);
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill("test@example.com");
+    await page.getByLabel("Password").fill("TestPassword123!");
+    await page.getByRole("button", { name: "Login" }).click();
+    await expect(page.getByTestId("dashboard")).toBeVisible();
+    await page.goto(`/workflows/${workflow.id}`);
+
+    await page.getByTestId("repeat-kind").selectOption("hours");
+    await page.getByTestId("repeat-every").fill("0.5");
+
+    await expect(page.getByTestId("repeat-error")).toContainText("interi");
+    // No sentence at all rather than one that cannot happen.
+    await expect(page.getByTestId("repeat-preview")).toBeHidden();
+    await expect(page.getByTestId("repeat-submit")).toBeDisabled();
+
+    // And the half hour does have a home, which the message points at.
+    await page.getByTestId("repeat-kind").selectOption("minutes");
+    await page.getByTestId("repeat-every").fill("30");
+    await expect(page.getByTestId("repeat-error")).toBeHidden();
+    await expect(page.getByTestId("repeat-preview")).toHaveText("ogni 30 minuti");
+    await expect(page.getByTestId("repeat-submit")).toBeEnabled();
+  });
+
   test("the recurring UI creates a schedule that reads back as a sentence", async ({ page }) => {
     const workflow = await client.createWorkflow(
       `Ricorrente UI ${Date.now()}`,
