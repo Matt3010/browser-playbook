@@ -76,7 +76,9 @@ test.describe("variables and secrets", () => {
     // The page lists the tokens without importing the engine — the browser
     // bundle deliberately holds no workspace package. So the list is checked
     // against the engine here instead of being trusted.
-    const tokens = await page.getByTestId("formula-token").allInnerTexts();
+    const tokens = await page
+      .locator("[data-token]")
+      .evaluateAll((nodes) => nodes.map((node) => node.getAttribute("data-token") ?? ""));
     expect(tokens.length, "the help must list something").toBeGreaterThan(0);
     for (const token of tokens) {
       expect(hasFormula(token), `${token} is offered but not recognised`).toBe(true);
@@ -92,6 +94,23 @@ test.describe("variables and secrets", () => {
     await expect(row).toContainText("formula");
     // What is stored is the formula, not one of its answers.
     await expect(page.getByTestId(`credential-value-${name}`)).toHaveText("repo-{{timestamp}}");
+  });
+
+  test("puts a formula in the value, without anyone typing braces", async ({ page }) => {
+    // The tokens were listed under the whole form, so it was not clear which
+    // field they belonged to — the first thing tried was typing one into the
+    // name, which the API refuses and the preview rendered as nonsense.
+    await page.getByTestId("credential-name").fill(`ordine${suffix}`);
+    await page.getByTestId("formula-token-random").click();
+    await page.getByTestId("formula-token-date").click();
+
+    await expect(page.getByTestId("credential-value")).toHaveValue("{{random}}{{date}}");
+    await expect(page.getByTestId("credential-name"), "the name is left alone").toHaveValue(
+      `ordine${suffix}`
+    );
+
+    await page.getByTestId("credential-submit").click();
+    await expect(page.getByTestId(`credential-row-ordine${suffix}`)).toContainText("formula");
   });
 
   test("says when a value holds nothing", async ({ page }) => {

@@ -79,12 +79,16 @@ export class FakeWorkerClient implements Pick<
     return info;
   }
 
+  /** Secrets the recording captured, as the real worker would report them. */
+  recordedCredentials: Array<{ name: string; value: string }> = [];
+
   async getRecording(sessionId: string): Promise<WorkerRecording> {
     await this.getSession(sessionId);
     return {
       actions: this.recordedActions,
       steps: this.recordedSteps,
-      credentials: [],
+      credentials: this.recordedCredentials.map((entry) => ({ name: entry.name })),
+      credentialValues: this.recordedCredentials,
       skipped: 0
     };
   }

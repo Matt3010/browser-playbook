@@ -172,8 +172,12 @@ export class AppClient {
     }>("GET", `/api/sessions/${sessionId}/recording`);
   }
 
-  saveRecordedCredentials(sessionId: string) {
-    return this.ok<{ saved: string[] }>("POST", `/api/sessions/${sessionId}/credentials`);
+  saveRecordedCredentials(sessionId: string, overwrite: string[] = []) {
+    return this.ok<{ saved: string[]; kept: string[] }>(
+      "POST",
+      `/api/sessions/${sessionId}/credentials`,
+      { overwrite }
+    );
   }
 
   interact(sessionId: string, input: Record<string, unknown>) {

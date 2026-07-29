@@ -25,15 +25,28 @@ const WEEKDAYS = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "
 /** A recurrence as a sentence, because "0 3 * * 1" is not one. */
 function describeRecurrence(recurrence: Recurrence): string {
   switch (recurrence.kind) {
-    case "hourly":
-      return `ogni ora al minuto ${recurrence.minute}`;
-    case "daily":
-      return `ogni giorno alle ${recurrence.time}`;
+    case "minutes":
+      return recurrence.every === 1 ? "ogni minuto" : `ogni ${recurrence.every} minuti`;
+    case "hours":
+      return recurrence.every === 1
+        ? `ogni ora al minuto ${recurrence.minute}`
+        : `ogni ${recurrence.every} ore al minuto ${recurrence.minute}`;
+    case "days":
+      return recurrence.every === 1
+        ? `ogni giorno alle ${recurrence.time}`
+        : `ogni ${recurrence.every} giorni alle ${recurrence.time}`;
     case "weekly":
       return `ogni ${WEEKDAYS[recurrence.weekday]} alle ${recurrence.time}`;
-    case "monthly":
-      return `il ${recurrence.day} di ogni mese alle ${recurrence.time}`;
+    case "months":
+      return recurrence.every === 1
+        ? `il ${recurrence.day} di ogni mese alle ${recurrence.time}`
+        : `il ${recurrence.day} ogni ${recurrence.every} mesi alle ${recurrence.time}`;
   }
+}
+
+/** The step of a cron field: a bare star is every one, a step of three every third. */
+function stepOf(field: string): number {
+  return field.startsWith("*/") ? Number(field.slice(2)) : 1;
 }
 
 /**
@@ -42,14 +55,29 @@ function describeRecurrence(recurrence: Recurrence): string {
  * whose line the user cannot read is a schedule they cannot check.
  */
 function describeCron(cron: string): string {
-  const [minute, hour, day, , weekday] = cron.split(" ");
+  const [minute, hour, day, month, weekday] = cron.split(" ");
   const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
-  if (hour === "*") return describeRecurrence({ kind: "hourly", minute: Number(minute) });
+
+  if (hour === "*" || hour.startsWith("*/")) {
+    if (minute === "*" || minute.startsWith("*/")) {
+      return describeRecurrence({ kind: "minutes", every: stepOf(minute) });
+    }
+    return describeRecurrence({ kind: "hours", every: stepOf(hour), minute: Number(minute) });
+  }
   if (weekday !== "*") {
     return describeRecurrence({ kind: "weekly", weekday: Number(weekday), time });
   }
-  if (day !== "*") return describeRecurrence({ kind: "monthly", day: Number(day), time });
-  return describeRecurrence({ kind: "daily", time });
+  // The day field is either a step — every N days — or the day of the month a
+  // monthly schedule lands on. A step is not a day number.
+  if (day === "*" || day.startsWith("*/")) {
+    return describeRecurrence({ kind: "days", every: stepOf(day), time });
+  }
+  return describeRecurrence({
+    kind: "months",
+    every: stepOf(month),
+    day: Number(day),
+    time
+  });
 }
 
 export default function WorkflowDetailPage({ params }: { params: { id: string } }) {
@@ -67,8 +95,11 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [runAt, setRunAt] = useState("");
   /** The repeating schedule being composed: what the user picks, not a cron line. */
-  const [repeatKind, setRepeatKind] = useState<Recurrence["kind"]>("daily");
+  const [repeatKind, setRepeatKind] = useState<Recurrence["kind"]>("days");
   const [repeatTime, setRepeatTime] = useState("03:00");
+  /** Minute of the hour for an hourly schedule, and the gap for one in minutes. */
+  const [repeatMinute, setRepeatMinute] = useState(0);
+  const [repeatEvery, setRepeatEvery] = useState(1);
   const [repeatWeekday, setRepeatWeekday] = useState(1);
   const [repeatDay, setRepeatDay] = useState(1);
   const [timezone, setTimezone] = useState("Europe/Rome");
@@ -80,6 +111,13 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [values, setValues] = useState<CredentialEntry[]>([]);
   /** Text on its way to the remote browser. */
   const [remoteText, setRemoteText] = useState("");
+  /**
+   * Secrets this recording captured that the user already has, and the ones they
+   * chose to replace. A secret is shared by every workflow on that site, so
+   * typing the password again while recording must not silently overwrite it.
+   */
+  const [knownSecrets, setKnownSecrets] = useState<string[]>([]);
+  const [replacing, setReplacing] = useState<string[]>([]);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   /**
@@ -121,6 +159,9 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
       return merged;
     });
     setDirty(true);
+    setKnownSecrets(
+      (recording.credentials ?? []).filter((entry) => entry.exists).map((entry) => entry.name)
+    );
     return recording;
   }, []);
 
@@ -434,11 +475,17 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
    */
   async function persistSteps(): Promise<Step[]> {
     if (session) {
-      const result = await api.post<{ saved: string[] }>(
-        `/sessions/${session.sessionId}/credentials`
+      const result = await api.post<{ saved: string[]; kept: string[] }>(
+        `/sessions/${session.sessionId}/credentials`,
+        // Only what the user asked to replace: everything else that already
+        // exists keeps the value the other workflows on that site rely on.
+        { overwrite: replacing }
       );
       if (result.saved.length > 0) {
         log(`Credenziali salvate: ${result.saved.join(", ")}`);
+      }
+      if (result.kept?.length > 0) {
+        log(`Credenziali riusate: ${result.kept.join(", ")}`);
       }
     }
     const saved = await api.put<Step[]>(`/workflows/${workflowId}/steps`, { steps });
@@ -469,14 +516,16 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   /** Builds the recurrence out of the fields the form shows for the chosen kind. */
   function currentRecurrence(): Recurrence {
     switch (repeatKind) {
-      case "hourly":
-        return { kind: "hourly", minute: Number(repeatTime.split(":")[1] ?? 0) };
+      case "minutes":
+        return { kind: "minutes", every: repeatEvery };
+      case "hours":
+        return { kind: "hours", every: repeatEvery, minute: repeatMinute };
       case "weekly":
         return { kind: "weekly", weekday: repeatWeekday, time: repeatTime };
-      case "monthly":
-        return { kind: "monthly", day: repeatDay, time: repeatTime };
+      case "months":
+        return { kind: "months", every: repeatEvery, day: repeatDay, time: repeatTime };
       default:
-        return { kind: "daily", time: repeatTime };
+        return { kind: "days", every: repeatEvery, time: repeatTime };
     }
   }
 
@@ -604,6 +653,47 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
               Chiudi le sessioni aperte
             </button>
           ) : null}
+        </div>
+      ) : null}
+
+      {knownSecrets.length > 0 ? (
+        <div
+          className="card border-amber-200 bg-amber-50 text-sm"
+          data-testid="secret-reuse"
+        >
+          {/* Asked, not decided: the value behind this name is what every other
+              workflow on the site logs in with. */}
+          <p className="mb-2">
+            Per questo sito hai già {knownSecrets.length === 1 ? "una credenziale" : "delle credenziali"}
+            . Riuso {knownSecrets.length === 1 ? "quella salvata" : "quelle salvate"}, oppure
+            {" "}
+            {knownSecrets.length === 1 ? "la sostituisco" : "le sostituisco"} con quanto hai appena
+            digitato?
+          </p>
+          <ul className="space-y-1">
+            {knownSecrets.map((name) => {
+              const replace = replacing.includes(name);
+              return (
+                <li key={name} className="flex flex-wrap items-center gap-2">
+                  <code className="flex-1">{name}</code>
+                  <span className="text-xs text-slate-600" data-testid={`secret-choice-${name}`}>
+                    {replace ? "sostituisco con quella digitata" : "riuso quella salvata"}
+                  </span>
+                  <button
+                    className="btn-secondary"
+                    onClick={() =>
+                      setReplacing((current) =>
+                        replace ? current.filter((n) => n !== name) : [...current, name]
+                      )
+                    }
+                    data-testid={`secret-toggle-${name}`}
+                  >
+                    {replace ? "Riusa quella salvata" : "Sostituisci"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
         </div>
       ) : null}
 
@@ -797,10 +887,11 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
               onChange={(e) => setRepeatKind(e.target.value as Recurrence["kind"])}
               data-testid="repeat-kind"
             >
-              <option value="hourly">Ora</option>
-              <option value="daily">Giorno</option>
+              <option value="minutes">Minuti</option>
+              <option value="hours">Ore</option>
+              <option value="days">Giorni</option>
               <option value="weekly">Settimana</option>
-              <option value="monthly">Mese</option>
+              <option value="months">Mesi</option>
             </select>
           </label>
 
@@ -822,7 +913,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
             </label>
           ) : null}
 
-          {repeatKind === "monthly" ? (
+          {repeatKind === "months" ? (
             <label className="block">
               <span className="text-xs text-slate-600">Giorno del mese</span>
               <input
@@ -838,18 +929,51 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
             </label>
           ) : null}
 
-          <label className="block">
-            <span className="text-xs text-slate-600">
-              {repeatKind === "hourly" ? "Minuto" : "Ora"}
-            </span>
-            <input
-              className="input"
-              type="time"
-              value={repeatTime}
-              onChange={(e) => setRepeatTime(e.target.value)}
-              data-testid="repeat-time"
-            />
-          </label>
+          {repeatKind !== "weekly" ? (
+            <label className="block">
+              <span className="text-xs text-slate-600">Quanti</span>
+              <input
+                className="input w-24"
+                type="number"
+                min={1}
+                max={repeatKind === "minutes" ? 59 : repeatKind === "hours" ? 23 : repeatKind === "days" ? 30 : 12}
+                value={repeatEvery}
+                onChange={(e) => setRepeatEvery(Number(e.target.value))}
+                data-testid="repeat-every"
+              />
+            </label>
+          ) : null}
+
+          {repeatKind === "hours" ? (
+            // A number, not a clock: the field said "Minuto" and showed hours
+            // and minutes, so a 15 typed into it became the hour and the minute
+            // stayed nought.
+            <label className="block">
+              <span className="text-xs text-slate-600">Minuto dell&apos;ora</span>
+              <input
+                className="input w-28"
+                type="number"
+                min={0}
+                max={59}
+                value={repeatMinute}
+                onChange={(e) => setRepeatMinute(Number(e.target.value))}
+                data-testid="repeat-minute"
+              />
+            </label>
+          ) : null}
+
+          {repeatKind !== "minutes" && repeatKind !== "hours" ? (
+            <label className="block">
+              <span className="text-xs text-slate-600">Ora</span>
+              <input
+                className="input"
+                type="time"
+                value={repeatTime}
+                onChange={(e) => setRepeatTime(e.target.value)}
+                data-testid="repeat-time"
+              />
+            </label>
+          ) : null}
 
           <button
             className="btn"

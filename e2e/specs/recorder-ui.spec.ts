@@ -313,6 +313,60 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
     await page.getByTestId("close-session").click();
   });
 
+  test("asks before replacing a password the site already has", async ({ page }) => {
+    // A secret is shared by every workflow on that site. Recording a second one
+    // means typing the password again — perhaps wrong, perhaps for another
+    // account — and it used to overwrite the stored one without a word.
+    const owner = new AppClient();
+    const email = `riuso-${Date.now()}@example.com`;
+    await owner.register(email);
+    await loginThroughUi(page, email);
+
+    // The password this user already has for the site.
+    await owner.saveCredential("password_test_web", "quella-buona", "secret");
+
+    const workflow = await owner.createWorkflow(
+      `Secondo workflow ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/login`
+    );
+    const sessionId = await startSession(page, workflow.id);
+
+    await page.getByTestId("record").click();
+    await expect(page.getByTestId("recording-state")).toContainText("attiva");
+    await owner.interact(sessionId, { kind: "fill", selector: "#email", value: SEED_EMAIL });
+    await owner.interact(sessionId, {
+      kind: "fill",
+      selector: "#password",
+      value: "digitata-male"
+    });
+
+    // The page notices, and asks rather than deciding.
+    await expect(page.getByTestId("secret-reuse")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("secret-choice-password_test_web")).toHaveText(
+      "riuso quella salvata"
+    );
+
+    await page.getByTestId("save-steps").click();
+    await expect(page.getByTestId("live-log")).toContainText("Credenziali riusate", {
+      timeout: 30_000
+    });
+    // The log line is written before the steps are on their way: wait for the
+    // save itself to land, or the run below races it.
+    await expect(page.getByTestId("unsaved-changes")).toBeHidden({ timeout: 30_000 });
+
+    // The stored secret is untouched: the other workflows still log in.
+    const stored = (await owner.listCredentials()).find((c) => c.name === "password_test_web");
+    expect(stored).toMatchObject({ kind: "secret", hasValue: true });
+    const runs = await owner.runNow(workflow.id);
+    const execution = await owner.waitForExecution(runs.id);
+    expect(
+      execution.status,
+      "the reused password must be the one that works"
+    ).toBe("completed");
+
+    await page.getByTestId("close-session").click();
+  });
+
   test("running straight after recording stores the secret the steps reference", async ({
     page
   }) => {

@@ -245,10 +245,26 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         const recording = await app.worker.getRecording(request.params.id);
         // Captured secret values stay on the server: the client only learns the
         // credential names that the steps reference.
+        // Which of the captured secrets this user already has. Recording a
+        // second workflow for a site means typing its password again, and
+        // whether that replaces the one every other workflow depends on is the
+        // user's decision, not a side effect of recording.
+        const existing = await app.prisma.credential.findMany({
+          where: {
+            userId,
+            name: { in: recording.credentials.map((entry) => entry.name) }
+          },
+          select: { name: true }
+        });
+        const known = new Set(existing.map((row) => row.name));
+
         return {
           actions: recording.actions,
           steps: recording.steps,
-          credentials: recording.credentials,
+          credentials: recording.credentials.map((entry) => ({
+            name: entry.name,
+            exists: known.has(entry.name)
+          })),
           skipped: recording.skipped,
           verifications: recording.verifications ?? []
         };
@@ -279,12 +295,36 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
      */
     scoped.post<{ Params: { id: string } }>("/:id/credentials", async (request, reply) => {
       const { userId } = currentUser(request);
+      // Names the user has decided to replace with what was just typed.
+      // Everything else that already exists is left exactly as it is: a secret
+      // is shared by every workflow on that site, and replacing it because a
+      // password was typed again — perhaps wrong, perhaps for another account —
+      // breaks them all, silently, until the next scheduled run fails.
+      const overwrite = new Set(
+        Array.isArray((request.body as { overwrite?: unknown } | null)?.overwrite)
+          ? ((request.body as { overwrite: unknown[] }).overwrite.filter(
+              (name): name is string => typeof name === "string"
+            ) as string[])
+          : []
+      );
       try {
         await loadOwnedSession(userId, request.params.id);
         const recording = await app.worker.getRecording(request.params.id);
         const values = recording.credentialValues ?? [];
 
+        const existing = await app.prisma.credential.findMany({
+          where: { userId, name: { in: values.map((entry) => entry.name) } },
+          select: { name: true }
+        });
+        const known = new Set(existing.map((row) => row.name));
+
+        const saved: string[] = [];
+        const kept: string[] = [];
         for (const entry of values) {
+          if (known.has(entry.name) && !overwrite.has(entry.name)) {
+            kept.push(entry.name);
+            continue;
+          }
           await app.prisma.credential.upsert({
             where: { userId_name: { userId, name: entry.name } },
             create: {
@@ -298,8 +338,9 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
               encryptedValue: encryptSecret(entry.value, app.config.credentialsEncKey)
             }
           });
+          saved.push(entry.name);
         }
-        return { saved: values.map((v) => v.name) };
+        return { saved, kept };
       } catch (err) {
         const status = err instanceof WorkerHttpError ? err.statusCode : 503;
         return reply.code(status).send({ error: (err as Error).message });

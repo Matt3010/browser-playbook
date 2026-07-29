@@ -238,7 +238,11 @@ test.describe("single future schedule", () => {
     );
     await client.putSteps(workflow.id, [gotoStep(`${TEST_WEB_INTERNAL_URL}/elements`)]);
 
-    const created = await client.scheduleRecurring(workflow.id, { kind: "hourly", minute: 0 });
+    const created = await client.scheduleRecurring(workflow.id, {
+      kind: "hours",
+      every: 1,
+      minute: 0
+    });
     expect(created.cron).toBe("0 * * * *");
     expect(created.runAt).toBeNull();
     expect(
@@ -252,7 +256,7 @@ test.describe("single future schedule", () => {
       kind: "minutes",
       every: 1
     });
-    expect(everyMinute.cron).toBe("*/1 * * * *");
+    expect(everyMinute.cron).toBe("* * * * *");
 
     await expect
       .poll(async () => (await client.listExecutions(workflow.id)).length, { timeout: 150_000 })
@@ -302,6 +306,98 @@ test.describe("single future schedule", () => {
       submissions[1].name,
       "a repeating workflow must not send the same name twice"
     ).not.toBe(submissions[0].name);
+  });
+
+  test("an hourly schedule takes the minute it was given", async ({ page }) => {
+    // The control was a clock face labelled "Minuto": typing 15 put it in the
+    // hours, the minute stayed 0, and the schedule ran on the hour every hour.
+    const workflow = await client.createWorkflow(
+      `Ogni ora ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [gotoStep(`${TEST_WEB_INTERNAL_URL}/elements`)]);
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill("test@example.com");
+    await page.getByLabel("Password").fill("TestPassword123!");
+    await page.getByRole("button", { name: "Login" }).click();
+    await expect(page.getByTestId("dashboard")).toBeVisible();
+    await page.goto(`/workflows/${workflow.id}`);
+
+    await page.getByTestId("repeat-kind").selectOption("hours");
+    await page.getByTestId("repeat-every").fill("1");
+    await page.getByTestId("repeat-minute").fill("15");
+    await expect(page.getByTestId("repeat-preview")).toHaveText("ogni ora al minuto 15");
+
+    await page.getByTestId("repeat-submit").click();
+    await expect(page.getByTestId("schedule-when").first()).toHaveText("ogni ora al minuto 15", {
+      timeout: 30_000
+    });
+
+    const schedules = await client.request(
+      "GET",
+      `/api/workflows/${workflow.id}/schedules`
+    );
+    expect(schedules.json<Array<{ cron: string }>>()[0].cron).toBe("15 * * * *");
+  });
+
+  test("every few hours, and every few days, are offered too", async ({ page }) => {
+    const workflow = await client.createWorkflow(
+      `Ogni pochi minuti ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [gotoStep(`${TEST_WEB_INTERNAL_URL}/elements`)]);
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill("test@example.com");
+    await page.getByLabel("Password").fill("TestPassword123!");
+    await page.getByRole("button", { name: "Login" }).click();
+    await expect(page.getByTestId("dashboard")).toBeVisible();
+    await page.goto(`/workflows/${workflow.id}`);
+
+    await page.getByTestId("repeat-kind").selectOption("minutes");
+    await page.getByTestId("repeat-every").fill("15");
+    await expect(page.getByTestId("repeat-preview")).toHaveText("ogni 15 minuti");
+    await page.getByTestId("repeat-submit").click();
+    await expect(page.getByTestId("schedule-when").first()).toHaveText("ogni 15 minuti", {
+      timeout: 30_000
+    });
+
+    // Every few hours, at a minute of its own.
+    await page.getByTestId("repeat-kind").selectOption("hours");
+    await page.getByTestId("repeat-every").fill("4");
+    await page.getByTestId("repeat-minute").fill("30");
+    await expect(page.getByTestId("repeat-preview")).toHaveText("ogni 4 ore al minuto 30");
+    await page.getByTestId("repeat-submit").click();
+    await expect(page.getByTestId("schedule-when").first()).toHaveText(
+      "ogni 4 ore al minuto 30",
+      { timeout: 30_000 }
+    );
+
+    // Every few days, at a time of day.
+    await page.getByTestId("repeat-kind").selectOption("days");
+    await page.getByTestId("repeat-every").fill("3");
+    await page.getByTestId("repeat-time").fill("07:30");
+    await expect(page.getByTestId("repeat-preview")).toHaveText("ogni 3 giorni alle 07:30");
+    await page.getByTestId("repeat-submit").click();
+    await expect(page.getByTestId("schedule-when").first()).toHaveText(
+      "ogni 3 giorni alle 07:30",
+      { timeout: 30_000 }
+    );
+
+    // And every few months, on a day of the month.
+    await page.getByTestId("repeat-kind").selectOption("months");
+    await page.getByTestId("repeat-every").fill("3");
+    await page.getByTestId("repeat-day").fill("1");
+    await page.getByTestId("repeat-time").fill("06:00");
+    await expect(page.getByTestId("repeat-preview")).toHaveText(
+      "il 1 ogni 3 mesi alle 06:00"
+    );
+    await page.getByTestId("repeat-submit").click();
+    await expect(page.getByTestId("schedule-when").first()).toHaveText(
+      "il 1 ogni 3 mesi alle 06:00",
+      { timeout: 30_000 }
+    );
   });
 
   test("the recurring UI creates a schedule that reads back as a sentence", async ({ page }) => {

@@ -12,12 +12,12 @@ import { api, ApiError, type CredentialEntry } from "@/lib/api";
  * asks the real engine whether it recognises each one.
  */
 const FORMULA_TOKENS = [
-  { token: "{{timestamp}}", describes: "20260728-113045" },
-  { token: "{{date}}", describes: "2026-07-28" },
-  { token: "{{time}}", describes: "11:30:45" },
-  { token: "{{random}}", describes: "sei caratteri casuali" },
-  { token: "{{random:10}}", describes: "dieci caratteri casuali" },
-  { token: "{{uuid}}", describes: "un identificatore unico" }
+  { id: "timestamp", label: "data e ora", token: "{{timestamp}}", describes: "20260728-113045" },
+  { id: "date", label: "data", token: "{{date}}", describes: "2026-07-28" },
+  { id: "time", label: "ora", token: "{{time}}", describes: "11:30:45" },
+  { id: "random", label: "casuale", token: "{{random}}", describes: "sei caratteri casuali" },
+  { id: "random10", label: "casuale lungo", token: "{{random:10}}", describes: "dieci caratteri casuali" },
+  { id: "uuid", label: "identificatore", token: "{{uuid}}", describes: "un identificatore unico" }
 ];
 
 /** Same shape the engine looks for, only to decide whether to show a badge. */
@@ -114,8 +114,13 @@ export default function CredentialsPage() {
               onChange={(e) => setName(e.target.value)}
               placeholder="customerName"
               required
+              pattern="[a-zA-Z0-9_]+"
+              title="Solo lettere, numeri e underscore"
               data-testid="credential-name"
             />
+            <span className="mt-1 block text-xs text-slate-400">
+              Solo lettere, numeri e underscore
+            </span>
           </label>
           <label className="block">
             <span className="label">Valore</span>
@@ -127,27 +132,31 @@ export default function CredentialsPage() {
               required
               data-testid="credential-value"
             />
+            {kind === "variable" ? (
+              // Buttons, not documentation: nobody has to work out where the
+              // tokens go or whether to type the braces — the first thing tried
+              // was typing one into the name, which the API refuses.
+              <span className="mt-1 flex flex-wrap items-center gap-1 text-xs text-slate-500">
+                <span>Aggiungi al valore:</span>
+                {FORMULA_TOKENS.map((entry) => (
+                  <button
+                    key={entry.token}
+                    type="button"
+                    className="btn-mini"
+                    title={`Diventa ${entry.describes}`}
+                    onClick={() => setValue((current) => current + entry.token)}
+                    data-testid={`formula-token-${entry.id}`}
+                    // What it inserts, so a test can ask the engine whether it
+                    // recognises every token this page offers.
+                    data-token={entry.token}
+                  >
+                    {entry.label}
+                  </button>
+                ))}
+              </span>
+            ) : null}
           </label>
         </div>
-
-        {kind === "variable" ? (
-          <div className="rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-600">
-            {/* Without this nobody would know the tokens exist, and a repeating
-                workflow would keep failing on a site that wants a new name. */}
-            <p>
-              <span className="font-medium">Formule</span> — una variabile può contenere valori
-              che cambiano a ogni esecuzione, utili quando il sito vuole un nome mai visto:
-            </p>
-            <ul className="mt-1 flex flex-wrap gap-x-4">
-              {FORMULA_TOKENS.map((entry) => (
-                <li key={entry.token}>
-                  <code data-testid="formula-token">{entry.token}</code>{" "}
-                  <span className="text-slate-400">{entry.describes}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
 
         <p className="text-xs text-slate-500">
           Uso nei passaggi:{" "}

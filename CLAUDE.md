@@ -271,6 +271,14 @@ These are the classes of defect this codebase actually produced, so look here fi
   attempt against the real site. The list shows what a reference holds, `(vuota)`
   when it holds nothing, dots for a secret; `hasValue` had to be fixed while doing
   it, because it read the length of the *ciphertext* and encrypting "" is not empty.
+- **Recording a password is not permission to replace one.** A secret belongs to
+  the site, not to the workflow being recorded: every workflow on that site logs
+  in with it. Saving a recording upserted it, so recording a second workflow —
+  where the password is typed again, perhaps wrong, perhaps for another account —
+  silently replaced the working one and broke the others, until their next
+  scheduled run failed. The recording now reports which captured names already
+  exist, the page asks, and the default is to reuse: `POST /sessions/:id/credentials`
+  overwrites only the names it is explicitly given.
 - **A list that is polled cannot also be edited.** The recorder page reads the
   recording every second while it runs, and `buildRecording` minted fresh step ids
   on every read — so it was a different list each time. The open step form lost
@@ -294,6 +302,17 @@ These are the classes of defect this codebase actually produced, so look here fi
   deliberately holds no workspace package (`@app/shared` carries jwt and bcrypt);
   an e2e reads the list out of the page and asks the real engine whether it
   recognises each one, so it cannot drift in silence.
+- **A recurrence is an interval, and cron only pretends to agree.** Every N
+  minutes, hours, days and months are step fields (`*/N`), and a step of one is
+  written `*` because `*/1` reads like a mistake. Weeks have no such field — the
+  weekday column steps through *days of the week*, not weeks — so "every two
+  weeks" is not expressible and is not offered. And a cron step means "at these
+  values", not "this long after the last run": every five hours fires at 0, 5,
+  10, 15, 20 and then waits four hours over midnight; every three days restarts
+  its count on the first of each month. The sentence shown to the user has to
+  mean that, which is why it is derived from the same table as the expression.
+  The control matters as much: the hourly minute was a clock face labelled
+  "Minuto", so a 15 typed into it became the hour and the minute stayed nought.
 - **A schedule that repeats is never finished.** Recurring schedules were added
   on top of the one-shot ones, and the runner marked the schedule `completed` when
   its run ended — true for an instant, false for a recurrence: it is due again.

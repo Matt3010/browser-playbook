@@ -770,7 +770,9 @@ test.describe("credentials recorded on different sites", () => {
         value: password
       });
       const saved = await client.saveRecordedCredentials(session.sessionId);
-      return saved.saved;
+      // What this recording captured, whether it was written or reused: a name
+      // the user already had is kept as it is, which is the point of asking.
+      return [...saved.saved, ...(saved.kept ?? [])];
     } finally {
       await client.closeSession(session.sessionId).catch(() => undefined);
     }

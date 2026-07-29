@@ -215,7 +215,7 @@ describe("recurring schedules", () => {
     const workflow = await runnableWorkflow("Ogni mattina");
 
     const response = await schedule(workflow.id, {
-      recurrence: { kind: "daily", time: "03:00" },
+      recurrence: { kind: "days", every: 1, time: "03:00" },
       timezone: "Europe/Rome"
     });
 
@@ -236,7 +236,7 @@ describe("recurring schedules", () => {
     const workflow = await runnableWorkflow("Ricorrenza sbagliata");
 
     const response = await schedule(workflow.id, {
-      recurrence: { kind: "daily", time: "25:00" },
+      recurrence: { kind: "days", every: 1, time: "25:00" },
       timezone: "Europe/Rome"
     });
 
@@ -248,7 +248,7 @@ describe("recurring schedules", () => {
     // Nobody is watching at three in the morning, every morning.
     const workflow = await createWorkflow(ctx.app, user.cookie, "Senza step");
     const response = await schedule(workflow.id, {
-      recurrence: { kind: "daily", time: "03:00" },
+      recurrence: { kind: "days", every: 1, time: "03:00" },
       timezone: "Europe/Rome"
     });
     expect(response.statusCode).toBe(409);
@@ -279,13 +279,13 @@ describe("recurring schedules", () => {
     const workflow = await runnableWorkflow("Cambio orario");
     const first = (
       await schedule(workflow.id, {
-        recurrence: { kind: "daily", time: "03:00" },
+        recurrence: { kind: "days", every: 1, time: "03:00" },
         timezone: "Europe/Rome"
       })
     ).json();
     const second = (
       await schedule(workflow.id, {
-        recurrence: { kind: "daily", time: "05:00" },
+        recurrence: { kind: "days", every: 1, time: "05:00" },
         timezone: "Europe/Rome"
       })
     ).json();

@@ -122,10 +122,11 @@ export interface Artifact {
 
 /** How a repeating schedule is described: what the user picked, not a cron line. */
 export type Recurrence =
-  | { kind: "hourly"; minute: number }
-  | { kind: "daily"; time: string }
+  | { kind: "minutes"; every: number }
+  | { kind: "hours"; every: number; minute: number }
+  | { kind: "days"; every: number; time: string }
   | { kind: "weekly"; weekday: number; time: string }
-  | { kind: "monthly"; day: number; time: string };
+  | { kind: "months"; every: number; day: number; time: string };
 
 export interface Schedule {
   id: string;
@@ -188,7 +189,8 @@ export interface StepVerification {
 export interface RecordingResult {
   actions: unknown[];
   steps: Step[];
-  credentials: Array<{ name: string }>;
+  /** Secrets the recording captured, and whether this user already has them. */
+  credentials: Array<{ name: string; exists?: boolean }>;
   credentialValues?: Array<{ name: string; value: string }>;
   skipped: number;
   /** Aligned with `steps`: whether each one resolves on the live page. */

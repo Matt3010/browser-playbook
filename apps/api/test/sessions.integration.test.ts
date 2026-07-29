@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { verifySessionToken } from "@app/shared";
+import { decryptSecret, verifySessionToken } from "@app/shared";
 import {
   createTestContext,
   destroyTestContext,
@@ -236,5 +236,111 @@ describe("browser session isolation between users", () => {
     const portA = ctx.worker.sessions.get(first.sessionId)!.vncPort;
     const portB = ctx.worker.sessions.get(second.sessionId)!.vncPort;
     expect(portA).not.toBe(portB);
+  });
+});
+
+describe("a secret this site already has", () => {
+  async function session() {
+    const created = await ctx.app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      headers: { cookie: user.cookie },
+      payload: { startUrl: "http://test-web:3001/login" }
+    });
+    return created.json().sessionId as string;
+  }
+
+  async function storedValue(name: string): Promise<string | null> {
+    const row = await ctx.prisma.credential.findFirst({ where: { userId: user.id, name } });
+    if (!row) return null;
+    return decryptSecret(row.encryptedValue, ctx.app.config.credentialsEncKey);
+  }
+
+  it("keeps the one that is already there instead of overwriting it", async () => {
+    // Recording a second workflow for a site means typing the password again.
+    // Typed wrong, or for another account, it used to replace the secret every
+    // other workflow on that site depends on — silently.
+    await ctx.app.inject({
+      method: "POST",
+      url: "/api/credentials",
+      headers: { cookie: user.cookie },
+      payload: { name: "password_test_web", value: "quella-buona", kind: "secret" }
+    });
+
+    const sessionId = await session();
+    ctx.worker.recordedCredentials = [{ name: "password_test_web", value: "quella-digitata" }];
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/credentials`,
+      headers: { cookie: user.cookie }
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().kept).toEqual(["password_test_web"]);
+    expect(response.json().saved).toEqual([]);
+    expect(await storedValue("password_test_web")).toBe("quella-buona");
+  });
+
+  it("replaces it when that is what was asked for", async () => {
+    await ctx.app.inject({
+      method: "POST",
+      url: "/api/credentials",
+      headers: { cookie: user.cookie },
+      payload: { name: "password_test_web", value: "quella-vecchia", kind: "secret" }
+    });
+
+    const sessionId = await session();
+    ctx.worker.recordedCredentials = [{ name: "password_test_web", value: "quella-nuova" }];
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/credentials`,
+      headers: { cookie: user.cookie },
+      payload: { overwrite: ["password_test_web"] }
+    });
+
+    expect(response.json().saved).toEqual(["password_test_web"]);
+    expect(await storedValue("password_test_web")).toBe("quella-nuova");
+  });
+
+  it("saves a secret the site does not have yet without being asked", async () => {
+    const sessionId = await session();
+    ctx.worker.recordedCredentials = [{ name: "password_nuovo_sito", value: "primo-valore" }];
+
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/sessions/${sessionId}/credentials`,
+      headers: { cookie: user.cookie }
+    });
+
+    expect(response.json().saved).toEqual(["password_nuovo_sito"]);
+    expect(await storedValue("password_nuovo_sito")).toBe("primo-valore");
+  });
+
+  it("says which of the captured secrets already exist", async () => {
+    await ctx.app.inject({
+      method: "POST",
+      url: "/api/credentials",
+      headers: { cookie: user.cookie },
+      payload: { name: "password_test_web", value: "gia-qui", kind: "secret" }
+    });
+
+    const sessionId = await session();
+    ctx.worker.recordedCredentials = [
+      { name: "password_test_web", value: "x" },
+      { name: "password_altro_sito", value: "y" }
+    ];
+
+    const recording = await ctx.app.inject({
+      method: "GET",
+      url: `/api/sessions/${sessionId}/recording`,
+      headers: { cookie: user.cookie }
+    });
+
+    expect(recording.json().credentials).toEqual([
+      { name: "password_test_web", exists: true },
+      { name: "password_altro_sito", exists: false }
+    ]);
   });
 });
