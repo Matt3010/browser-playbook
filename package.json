@@ -6,7 +6,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "lint": "eslint apps packages --ext .ts,.tsx",
+    "lint": "eslint apps packages e2e --ext .ts,.tsx",
     "typecheck": "pnpm -r --if-present run typecheck",
     "test:unit": "pnpm -r --if-present run test:unit",
     "test:integration": "pnpm -r --workspace-concurrency=1 --if-present run test:integration",

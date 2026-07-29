@@ -49,7 +49,7 @@ test.describe("stopping the worker", () => {
       const raw = execFileSync(
         "docker",
         ["compose", "-f", file, "config", "--format", "json"],
-        { encoding: "utf8", cwd: process.cwd().replace(/[\/]e2e$/, "") }
+        { encoding: "utf8", cwd: process.cwd().replace(/[\\/]e2e$/, "") }
       );
       const config = JSON.parse(raw) as {
         services: Record<string, { stop_grace_period?: string }>;
@@ -145,7 +145,7 @@ test.describe("stack health", () => {
         "-c",
         "ps -eo stat --no-headers | grep -c '^Z' || true"
       ],
-      { encoding: "utf8", cwd: process.cwd().replace(/[\/]e2e$/, "") }
+      { encoding: "utf8", cwd: process.cwd().replace(/[\\/]e2e$/, "") }
     ).trim();
 
     expect(Number(zombies), `worker left ${zombies} zombie processes`).toBe(0);
