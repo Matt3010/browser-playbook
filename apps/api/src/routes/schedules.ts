@@ -1,5 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import { isRunnableStepList, StepSchema, validateSchedule } from "@app/workflow-schema";
+import {
+  isRecurringInput,
+  isRunnableStepList,
+  StepSchema,
+  validateRecurringSchedule,
+  validateSchedule
+} from "@app/workflow-schema";
 import { requireAuth, currentUser } from "../auth";
 import { loadOwnedWorkflow, loadOwnedSchedule } from "../ownership";
 import { referenceState, unresolvedReferences } from "../references";
@@ -20,7 +26,12 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(409).send({ error: "Workflow is disabled" });
     }
 
-    const validation = validateSchedule(request.body);
+    // Two shapes, one endpoint: an instant, or a recurrence. Which one is asked
+    // for decides everything downstream, so it is decided once, here.
+    const recurring = isRecurringInput(request.body);
+    const validation = recurring
+      ? validateRecurringSchedule(request.body)
+      : validateSchedule(request.body);
     if (!validation.valid) {
       return reply.code(400).send({ error: "Invalid schedule", details: validation.errors });
     }
@@ -54,6 +65,35 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(409).send(unresolved);
     }
 
+    if (recurring) {
+      const { cron, timezone } = validation as { cron: string; timezone: string };
+      const schedule = await app.prisma.schedule.create({
+        data: { workflowId: workflow.id, cron, timezone, runAt: null, status: "scheduled" }
+      });
+      try {
+        // No execution row is reserved: a recurrence has no single run, and each
+        // occurrence creates its own when the queue fires it.
+        await app.queue.upsertRecurring(schedule.id, cron, timezone, {
+          workflowId: workflow.id,
+          userId,
+          scheduleId: schedule.id
+        });
+        const updated = await app.prisma.schedule.update({
+          where: { id: schedule.id },
+          data: { queueJobId: schedule.id }
+        });
+        return reply.code(201).send({ ...updated, nextRunAt: await app.queue.nextRunOf(schedule.id) });
+      } catch (err) {
+        // Never leave a schedule that says it repeats when nothing repeats it.
+        await app.prisma.schedule.update({
+          where: { id: schedule.id },
+          data: { status: "failed" }
+        });
+        app.log.error({ err }, "Failed to register the recurring schedule");
+        return reply.code(503).send({ error: "Could not register the recurring schedule" });
+      }
+    }
+
     const { runAt, timezone } = request.body as { runAt: string; timezone: string };
 
     const schedule = await app.prisma.schedule.create({
@@ -71,7 +111,7 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
           userId,
           scheduleId: schedule.id
         },
-        validation.delayMs as number
+        (validation as { delayMs: number }).delayMs
       );
       const updated = await app.prisma.schedule.update({
         where: { id: schedule.id },
@@ -98,7 +138,7 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
     const workflow = await loadOwnedWorkflow(app, userId, request.params.id);
     return app.prisma.schedule.findMany({
       where: { workflowId: workflow.id },
-      orderBy: { runAt: "desc" },
+      orderBy: { createdAt: "desc" },
       include: { executions: { select: { id: true, status: true } } }
     });
   });
@@ -106,8 +146,11 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>("/schedules/:id", async (request) => {
     const { userId } = currentUser(request);
     const schedule = await loadOwnedSchedule(app, userId, request.params.id);
+    if (schedule.cron) {
+      return { ...schedule, jobState: null, nextRunAt: await app.queue.nextRunOf(schedule.id) };
+    }
     const jobState = schedule.queueJobId ? await app.queue.getJobState(schedule.queueJobId) : null;
-    return { ...schedule, jobState };
+    return { ...schedule, jobState, nextRunAt: schedule.runAt };
   });
 
   /** Cancels a schedule, but only while it has not started yet. */
@@ -121,7 +164,11 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
         .send({ error: `Cannot cancel a schedule in state '${schedule.status}'` });
     }
 
-    if (schedule.queueJobId) {
+    if (schedule.cron) {
+      // Removing the scheduler stops future occurrences; one already running is
+      // an execution of its own and is left to finish.
+      await app.queue.removeRecurring(schedule.id);
+    } else if (schedule.queueJobId) {
       const removed = await app.queue.cancel(schedule.queueJobId);
       if (!removed) {
         return reply.code(409).send({ error: "The scheduled job already started" });

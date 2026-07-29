@@ -162,8 +162,10 @@ export async function runExecution(
   });
 
   if (input.scheduleId) {
-    await prisma.schedule.update({
-      where: { id: input.scheduleId },
+    // Only a one-shot schedule moves out of `scheduled`: a recurring one stays
+    // there for as long as it repeats, which is also what keeps it cancellable.
+    await prisma.schedule.updateMany({
+      where: { id: input.scheduleId, cron: null },
       data: { status: "queued" }
     });
     await notifications.notify(
@@ -426,11 +428,24 @@ async function finish(
   });
 }
 
+/**
+ * Closes the schedule a run belonged to — unless it repeats.
+ *
+ * A one-shot schedule is finished the moment its run is: there is nothing left
+ * for it to do. A recurring one is not: it is due again. Marking it `completed`
+ * left it firing forever with no way to stop it, because cancelling only accepts
+ * a schedule that is still `scheduled`.
+ */
 async function settleSchedule(
   prisma: PrismaClient,
   scheduleId: string,
   status: "completed" | "failed"
 ): Promise<void> {
+  const schedule = await prisma.schedule.findUnique({
+    where: { id: scheduleId },
+    select: { cron: true }
+  });
+  if (!schedule || schedule.cron) return;
   await prisma.schedule.update({ where: { id: scheduleId }, data: { status } });
 }
 

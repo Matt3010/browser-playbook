@@ -189,3 +189,110 @@ describe("schedule cancellation", () => {
     expect(await ctx.queue.getJobState(created.queueJobId)).toBe("delayed");
   });
 });
+
+describe("recurring schedules", () => {
+  async function runnableWorkflow(name: string) {
+    const workflow = await createWorkflow(ctx.app, user.cookie, name);
+    await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: { steps: [gotoStep("http://test-web:3001/elements")] }
+    });
+    return workflow;
+  }
+
+  async function schedule(workflowId: string, payload: unknown) {
+    return ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflowId}/schedules`,
+      headers: { cookie: user.cookie },
+      payload: payload as Record<string, unknown>
+    });
+  }
+
+  it("registers a repeating job instead of reserving one execution", async () => {
+    const workflow = await runnableWorkflow("Ogni mattina");
+
+    const response = await schedule(workflow.id, {
+      recurrence: { kind: "daily", time: "03:00" },
+      timezone: "Europe/Rome"
+    });
+
+    expect(response.statusCode).toBe(201);
+    const created = response.json();
+    expect(created.cron).toBe("0 3 * * *");
+    expect(created.runAt).toBeNull();
+    expect(created.nextRunAt, "the queue knows when it is due next").toBeTruthy();
+
+    // A recurrence has no single run, so nothing is reserved for it.
+    expect(await ctx.prisma.execution.count({ where: { workflowId: workflow.id } })).toBe(0);
+
+    const stored = await ctx.prisma.schedule.findUnique({ where: { id: created.id } });
+    expect(stored).toMatchObject({ cron: "0 3 * * *", timezone: "Europe/Rome", status: "scheduled" });
+  });
+
+  it("refuses a recurrence that is not one", async () => {
+    const workflow = await runnableWorkflow("Ricorrenza sbagliata");
+
+    const response = await schedule(workflow.id, {
+      recurrence: { kind: "daily", time: "25:00" },
+      timezone: "Europe/Rome"
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(await ctx.prisma.schedule.count({ where: { workflowId: workflow.id } })).toBe(0);
+  });
+
+  it("checks the same things a one-shot schedule checks", async () => {
+    // Nobody is watching at three in the morning, every morning.
+    const workflow = await createWorkflow(ctx.app, user.cookie, "Senza step");
+    const response = await schedule(workflow.id, {
+      recurrence: { kind: "daily", time: "03:00" },
+      timezone: "Europe/Rome"
+    });
+    expect(response.statusCode).toBe(409);
+  });
+
+  it("stops repeating when it is cancelled", async () => {
+    const workflow = await runnableWorkflow("Da fermare");
+    const created = (
+      await schedule(workflow.id, {
+        recurrence: { kind: "weekly", weekday: 1, time: "07:30" },
+        timezone: "Europe/Rome"
+      })
+    ).json();
+    expect(await ctx.queue.nextRunOf(created.id)).toBeTruthy();
+
+    const cancelled = await ctx.app.inject({
+      method: "DELETE",
+      url: `/api/schedules/${created.id}`,
+      headers: { cookie: user.cookie }
+    });
+
+    expect(cancelled.statusCode).toBe(200);
+    expect(cancelled.json().status).toBe("cancelled");
+    expect(await ctx.queue.nextRunOf(created.id), "nothing may fire it again").toBeNull();
+  });
+
+  it("moves the recurrence instead of leaving two behind", async () => {
+    const workflow = await runnableWorkflow("Cambio orario");
+    const first = (
+      await schedule(workflow.id, {
+        recurrence: { kind: "daily", time: "03:00" },
+        timezone: "Europe/Rome"
+      })
+    ).json();
+    const second = (
+      await schedule(workflow.id, {
+        recurrence: { kind: "daily", time: "05:00" },
+        timezone: "Europe/Rome"
+      })
+    ).json();
+
+    expect(second.id).not.toBe(first.id);
+    // Each schedule is its own repeating job, keyed by its own id.
+    expect(await ctx.queue.nextRunOf(first.id)).toBeTruthy();
+    expect(await ctx.queue.nextRunOf(second.id)).toBeTruthy();
+  });
+});

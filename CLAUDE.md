@@ -271,6 +271,18 @@ These are the classes of defect this codebase actually produced, so look here fi
   attempt against the real site. The list shows what a reference holds, `(vuota)`
   when it holds nothing, dots for a secret; `hasValue` had to be fixed while doing
   it, because it read the length of the *ciphertext* and encrypting "" is not empty.
+- **A schedule that repeats is never finished.** Recurring schedules were added
+  on top of the one-shot ones, and the runner marked the schedule `completed` when
+  its run ended — true for an instant, false for a recurrence: it is due again.
+  Worse, cancelling only accepts a schedule that is still `scheduled`, so after
+  its first run it could not be stopped and kept firing. A recurrence also has no
+  `runAt`, so it must stay out of the overdue reconciler. And cancelling has to
+  remove the occurrence the queue has *already* placed, not just the scheduler:
+  the queue works ahead, so otherwise it fires once more after the user was told
+  it was cancelled. Occurrences carry no reserved execution row — each makes its
+  own when it fires (`startOccurrence`), and refuses to make one while the
+  previous run is still going, because a workflow acts on a real site and a run
+  slower than the interval would otherwise pile up behind itself.
 - **A row of links takes width from the page that needs it.** The navigation is a
   sidebar that folds to icons; the choice is remembered, and below 1024 px it
   starts folded, because the page it takes width from is the one showing a remote

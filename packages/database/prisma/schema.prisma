@@ -111,14 +111,17 @@ enum ScheduleStatus {
 }
 
 model Schedule {
-  id          String         @id @default(uuid())
-  workflowId  String
-  runAt       DateTime
-  timezone    String
-  status      ScheduleStatus @default(scheduled)
-  queueJobId  String?
-  createdAt   DateTime       @default(now())
-  updatedAt   DateTime       @updatedAt
+  id         String         @id @default(uuid())
+  workflowId String
+  /// The single instant of a one-shot schedule; null when it recurs.
+  runAt      DateTime?
+  /// Five-field cron expression of a recurring schedule; null when it runs once.
+  cron       String?
+  timezone   String
+  status     ScheduleStatus @default(scheduled)
+  queueJobId String?
+  createdAt  DateTime       @default(now())
+  updatedAt  DateTime       @updatedAt
 
   workflow   Workflow    @relation(fields: [workflowId], references: [id], onDelete: Cascade)
   executions Execution[]
@@ -149,9 +152,9 @@ model Execution {
   createdAt    DateTime        @default(now())
   updatedAt    DateTime        @updatedAt
 
-  workflow Workflow        @relation(fields: [workflowId], references: [id], onDelete: Cascade)
-  schedule Schedule?       @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
-  logs     ExecutionLog[]
+  workflow  Workflow       @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  schedule  Schedule?      @relation(fields: [scheduleId], references: [id], onDelete: SetNull)
+  logs      ExecutionLog[]
   artifacts Artifact[]
 
   @@index([workflowId])

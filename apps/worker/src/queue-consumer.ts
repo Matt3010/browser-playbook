@@ -9,7 +9,13 @@ import { runExecution } from "./runner/run-execution";
 export const EXECUTION_QUEUE_NAME = "workflow-executions";
 
 export interface ExecutionJobData {
-  executionId: string;
+  /**
+   * The row this job advances. A run asked for by hand, and a one-shot
+   * schedule, reserve it upfront so cancelling is a single lookup. A recurring
+   * schedule cannot: it has no single run, so each occurrence makes its own row
+   * when it fires, which is what `executionFor` does below.
+   */
+  executionId?: string;
   workflowId: string;
   userId: string;
   scheduleId?: string | null;
@@ -35,7 +41,11 @@ export function startQueueConsumer(deps: QueueConsumerDeps): QueueConsumer {
     EXECUTION_QUEUE_NAME,
     async (job: Job<ExecutionJobData>) => {
       deps.log.info({ jobId: job.id, data: job.data }, "Picked up execution job");
-      const result = await runExecution(job.data, {
+      const executionId = await startOccurrence(job.data, deps);
+      if (!executionId) {
+        return { status: "failed" as const, errorMessage: "Skipped: the previous run is still in progress" };
+      }
+      const result = await runExecution({ ...job.data, executionId }, {
         prisma: deps.prisma,
         notifications: deps.notifications,
         sessions: deps.sessions,
@@ -89,6 +99,56 @@ export function startQueueConsumer(deps: QueueConsumerDeps): QueueConsumer {
  * This assumes a single worker, which is what the MVP deploys. With several
  * workers it would have to be scoped to the executions this instance owned.
  */
+/**
+ * The execution row a job advances, creating it when the job did not bring one,
+ * and refusing the occurrence when the workflow is already running.
+ *
+ * Only a recurring schedule arrives without a row: its occurrences are produced
+ * by the queue on its own clock, so there is nothing to reserve when the
+ * schedule is saved — the row is what says this particular occurrence happened.
+ *
+ * The refusal is the same rule as everywhere else in this product: a workflow
+ * acts on a real site, so running it twice at once means doing the thing twice.
+ * A run that takes longer than the interval would otherwise pile occurrences up
+ * behind it and act on the site over and over, long after the hour they were
+ * meant for. Skipping is the only honest answer — the next occurrence is
+ * already on its way.
+ */
+export async function startOccurrence(
+  data: ExecutionJobData,
+  deps: { prisma: PrismaClient; log: Logger }
+): Promise<string | null> {
+  if (data.executionId) return data.executionId;
+
+  const inFlight = await deps.prisma.execution.findFirst({
+    where: {
+      workflowId: data.workflowId,
+      status: { in: ["queued", "starting", "running"] }
+    },
+    select: { id: true, status: true }
+  });
+  if (inFlight) {
+    deps.log.warn(
+      { workflowId: data.workflowId, scheduleId: data.scheduleId, executionId: inFlight.id },
+      "Skipped a recurring occurrence: the previous run has not finished"
+    );
+    return null;
+  }
+
+  const execution = await deps.prisma.execution.create({
+    data: {
+      workflowId: data.workflowId,
+      scheduleId: data.scheduleId ?? null,
+      status: "queued"
+    }
+  });
+  deps.log.info(
+    { executionId: execution.id, scheduleId: data.scheduleId },
+    "Created the execution row of a recurring occurrence"
+  );
+  return execution.id;
+}
+
 export async function reconcileOrphanedExecutions(deps: {
   prisma: PrismaClient;
   notifications: NotificationService;
@@ -140,7 +200,9 @@ export async function reconcileMissedSchedules(deps: {
   const cutoff = new Date(Date.now() - graceMs);
 
   const missed = await deps.prisma.schedule.findMany({
-    where: { status: "scheduled", runAt: { lt: cutoff } },
+    // A recurring schedule has no instant to be late for: its next occurrence
+    // lives in the queue, and `runAt` is null.
+    where: { status: "scheduled", cron: null, runAt: { lt: cutoff } },
     include: { workflow: { select: { name: true, userId: true } } }
   });
 

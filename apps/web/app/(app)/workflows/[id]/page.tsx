@@ -8,6 +8,7 @@ import {
   ApiError,
   type Execution,
   type RecordingResult,
+  type Recurrence,
   type Schedule,
   type SessionInfo,
   type CredentialEntry,
@@ -17,6 +18,38 @@ import {
 } from "@/lib/api";
 import { StepEditor } from "@/components/StepEditor";
 import { VncViewer, type VncStatus } from "@/components/VncViewer";
+
+const WEEKDAYS = ["domenica", "lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato"];
+
+/** A recurrence as a sentence, because "0 3 * * 1" is not one. */
+function describeRecurrence(recurrence: Recurrence): string {
+  switch (recurrence.kind) {
+    case "hourly":
+      return `ogni ora al minuto ${recurrence.minute}`;
+    case "daily":
+      return `ogni giorno alle ${recurrence.time}`;
+    case "weekly":
+      return `ogni ${WEEKDAYS[recurrence.weekday]} alle ${recurrence.time}`;
+    case "monthly":
+      return `il ${recurrence.day} di ogni mese alle ${recurrence.time}`;
+  }
+}
+
+/**
+ * The same sentence, read back from what was stored. The cron expression is
+ * derived from the recurrence, so it can be read back into one — and a schedule
+ * whose line the user cannot read is a schedule they cannot check.
+ */
+function describeCron(cron: string): string {
+  const [minute, hour, day, , weekday] = cron.split(" ");
+  const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+  if (hour === "*") return describeRecurrence({ kind: "hourly", minute: Number(minute) });
+  if (weekday !== "*") {
+    return describeRecurrence({ kind: "weekly", weekday: Number(weekday), time });
+  }
+  if (day !== "*") return describeRecurrence({ kind: "monthly", day: Number(day), time });
+  return describeRecurrence({ kind: "daily", time });
+}
 
 export default function WorkflowDetailPage({ params }: { params: { id: string } }) {
   const router = useRouter();
@@ -32,6 +65,11 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [busy, setBusy] = useState<string | null>(null);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [runAt, setRunAt] = useState("");
+  /** The repeating schedule being composed: what the user picks, not a cron line. */
+  const [repeatKind, setRepeatKind] = useState<Recurrence["kind"]>("daily");
+  const [repeatTime, setRepeatTime] = useState("03:00");
+  const [repeatWeekday, setRepeatWeekday] = useState(1);
+  const [repeatDay, setRepeatDay] = useState(1);
   const [timezone, setTimezone] = useState("Europe/Rome");
   const [dirty, setDirty] = useState(false);
   const [verifications, setVerifications] = useState<StepVerification[]>([]);
@@ -404,6 +442,32 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     if (execution) router.push(`/executions/${execution.id}`);
   }
 
+  /** Builds the recurrence out of the fields the form shows for the chosen kind. */
+  function currentRecurrence(): Recurrence {
+    switch (repeatKind) {
+      case "hourly":
+        return { kind: "hourly", minute: Number(repeatTime.split(":")[1] ?? 0) };
+      case "weekly":
+        return { kind: "weekly", weekday: repeatWeekday, time: repeatTime };
+      case "monthly":
+        return { kind: "monthly", day: repeatDay, time: repeatTime };
+      default:
+        return { kind: "daily", time: repeatTime };
+    }
+  }
+
+  async function scheduleRecurring() {
+    await run("schedule-recurring", async () => {
+      if (dirty) await persistSteps();
+      await api.post(`/workflows/${workflowId}/schedules`, {
+        recurrence: currentRecurrence(),
+        timezone
+      });
+      await loadSchedules();
+      log(`Pianificazione ricorrente creata (${describeRecurrence(currentRecurrence())})`);
+    });
+  }
+
   async function schedule() {
     if (!runAt) {
       setError("Indica data e ora dell'esecuzione");
@@ -694,6 +758,85 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
 
       {/* scheduling */}
       <div className="card space-y-2">
+        <h2 className="font-medium">Pianificazione ricorrente</h2>
+        <div className="flex flex-wrap items-end gap-2">
+          <label className="block">
+            <span className="text-xs text-slate-600">Ogni</span>
+            <select
+              className="input"
+              value={repeatKind}
+              onChange={(e) => setRepeatKind(e.target.value as Recurrence["kind"])}
+              data-testid="repeat-kind"
+            >
+              <option value="hourly">Ora</option>
+              <option value="daily">Giorno</option>
+              <option value="weekly">Settimana</option>
+              <option value="monthly">Mese</option>
+            </select>
+          </label>
+
+          {repeatKind === "weekly" ? (
+            <label className="block">
+              <span className="text-xs text-slate-600">Giorno</span>
+              <select
+                className="input"
+                value={repeatWeekday}
+                onChange={(e) => setRepeatWeekday(Number(e.target.value))}
+                data-testid="repeat-weekday"
+              >
+                {WEEKDAYS.map((label, index) => (
+                  <option key={label} value={index}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          {repeatKind === "monthly" ? (
+            <label className="block">
+              <span className="text-xs text-slate-600">Giorno del mese</span>
+              <input
+                className="input w-24"
+                type="number"
+                min={1}
+                max={28}
+                value={repeatDay}
+                onChange={(e) => setRepeatDay(Number(e.target.value))}
+                title="Fino al 28: un workflow fissato al 31 non partirebbe a febbraio"
+                data-testid="repeat-day"
+              />
+            </label>
+          ) : null}
+
+          <label className="block">
+            <span className="text-xs text-slate-600">
+              {repeatKind === "hourly" ? "Minuto" : "Ora"}
+            </span>
+            <input
+              className="input"
+              type="time"
+              value={repeatTime}
+              onChange={(e) => setRepeatTime(e.target.value)}
+              data-testid="repeat-time"
+            />
+          </label>
+
+          <button
+            className="btn"
+            onClick={scheduleRecurring}
+            disabled={busy !== null}
+            data-testid="repeat-submit"
+          >
+            Pianifica ricorrente
+          </button>
+          <span className="text-xs text-slate-500" data-testid="repeat-preview">
+            {describeRecurrence(currentRecurrence())}
+          </span>
+        </div>
+      </div>
+
+      <div className="card space-y-2">
         <h2 className="font-medium">Pianificazione singola</h2>
         <div className="flex flex-wrap items-end gap-2">
           <label className="block">
@@ -726,7 +869,12 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           <ul className="divide-y divide-slate-100 text-sm" data-testid="schedule-list">
             {schedules.map((item) => (
               <li key={item.id} className="flex items-center gap-3 py-2">
-                <span className="flex-1">{new Date(item.runAt).toLocaleString()}</span>
+                <span className="flex-1" data-testid="schedule-when">
+                  {item.cron ? describeCron(item.cron) : new Date(item.runAt!).toLocaleString()}
+                </span>
+                {item.cron ? (
+                  <span className="badge bg-blue-50 text-blue-700">ricorrente</span>
+                ) : null}
                 <span className="text-xs text-slate-500">{item.timezone}</span>
                 <span className="badge bg-slate-100 text-slate-700" data-testid="schedule-status">
                   {item.status}

@@ -218,6 +218,20 @@ export class AppClient {
     );
   }
 
+  scheduleRecurring(
+    workflowId: string,
+    recurrence: Record<string, unknown>,
+    timezone = "Europe/Rome"
+  ) {
+    return this.ok<{
+      id: string;
+      status: string;
+      cron: string;
+      runAt: string | null;
+      nextRunAt: string | null;
+    }>("POST", `/api/workflows/${workflowId}/schedules`, { recurrence, timezone });
+  }
+
   getSchedule(id: string) {
     return this.ok<{ id: string; status: string; jobState: string | null }>(
       "GET",

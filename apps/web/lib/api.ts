@@ -120,10 +120,22 @@ export interface Artifact {
   createdAt: string;
 }
 
+/** How a repeating schedule is described: what the user picked, not a cron line. */
+export type Recurrence =
+  | { kind: "hourly"; minute: number }
+  | { kind: "daily"; time: string }
+  | { kind: "weekly"; weekday: number; time: string }
+  | { kind: "monthly"; day: number; time: string };
+
 export interface Schedule {
   id: string;
   workflowId: string;
-  runAt: string;
+  /** The instant of a one-shot schedule; null when it repeats. */
+  runAt: string | null;
+  /** The cron expression of a repeating schedule; null when it runs once. */
+  cron: string | null;
+  /** When the queue will fire it next, for a repeating schedule. */
+  nextRunAt?: string | null;
   timezone: string;
   status: "scheduled" | "queued" | "cancelled" | "completed" | "failed";
   queueJobId: string | null;

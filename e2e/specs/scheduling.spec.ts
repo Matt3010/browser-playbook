@@ -228,6 +228,86 @@ test.describe("single future schedule", () => {
     expect(badZone.status).toBe(400);
   });
 
+  test("a recurring schedule runs by itself, again and again", async () => {
+    // The real proof of a recurrence is the second occurrence: the queue fires
+    // it on its own clock, and each one has to make an execution row of its own
+    // — nothing is reserved for it when the schedule is saved.
+    const workflow = await client.createWorkflow(
+      `Ricorrente ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [gotoStep(`${TEST_WEB_INTERNAL_URL}/elements`)]);
+
+    const created = await client.scheduleRecurring(workflow.id, { kind: "hourly", minute: 0 });
+    expect(created.cron).toBe("0 * * * *");
+    expect(created.runAt).toBeNull();
+    expect(
+      await client.listExecutions(workflow.id),
+      "a recurrence reserves nothing"
+    ).toHaveLength(0);
+
+    // Every minute, so the test can watch it happen rather than take the
+    // schedule's word for it.
+    const everyMinute = await client.scheduleRecurring(workflow.id, {
+      kind: "minutes",
+      every: 1
+    });
+    expect(everyMinute.cron).toBe("*/1 * * * *");
+
+    await expect
+      .poll(async () => (await client.listExecutions(workflow.id)).length, { timeout: 150_000 })
+      .toBeGreaterThanOrEqual(1);
+
+    const first = (await client.listExecutions(workflow.id))[0];
+    const finished = await client.waitForExecution(first.id);
+    expect(finished.status, `execution failed: ${finished.errorMessage ?? ""}`).toBe("completed");
+
+    // Cancelling stops the next one from ever being created.
+    await client.cancelSchedule(everyMinute.id);
+    await client.cancelSchedule(created.id);
+    const afterCancel = (await client.listExecutions(workflow.id)).length;
+    await new Promise((resolve) => setTimeout(resolve, 70_000));
+    expect(
+      (await client.listExecutions(workflow.id)).length,
+      "a cancelled recurrence must never fire again"
+    ).toBe(afterCancel);
+  });
+
+  test("the recurring UI creates a schedule that reads back as a sentence", async ({ page }) => {
+    const workflow = await client.createWorkflow(
+      `Ricorrente UI ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [gotoStep(`${TEST_WEB_INTERNAL_URL}/elements`)]);
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill("test@example.com");
+    await page.getByLabel("Password").fill("TestPassword123!");
+    await page.getByRole("button", { name: "Login" }).click();
+    await expect(page.getByTestId("dashboard")).toBeVisible();
+
+    await page.goto(`/workflows/${workflow.id}`);
+
+    await page.getByTestId("repeat-kind").selectOption("weekly");
+    await page.getByTestId("repeat-weekday").selectOption("1");
+    await page.getByTestId("repeat-time").fill("07:30");
+    await expect(page.getByTestId("repeat-preview")).toHaveText("ogni lunedì alle 07:30");
+
+    await page.getByTestId("repeat-submit").click();
+
+    // Read back from what was stored, not from what was typed.
+    await expect(page.getByTestId("schedule-when").first()).toHaveText(
+      "ogni lunedì alle 07:30",
+      { timeout: 30_000 }
+    );
+    await expect(page.getByTestId("schedule-status").first()).toHaveText("scheduled");
+
+    await page.getByTestId("schedule-cancel").first().click();
+    await expect(page.getByTestId("schedule-status").first()).toHaveText("cancelled", {
+      timeout: 30_000
+    });
+  });
+
   test("the scheduling UI creates and cancels a schedule", async ({ page }) => {
     const workflow = await client.createWorkflow(
       `Pianifica da UI ${Date.now()}`,
