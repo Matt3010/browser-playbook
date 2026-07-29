@@ -420,6 +420,85 @@ test.describe("visual step editor", () => {
     expect(stored.steps).toHaveLength(3);
   });
 
+  test("lets the result name be retyped, instead of refilling itself", async ({ page }) => {
+    // The default was applied on every edit rather than when the step became a
+    // read, so emptying the field put "valore" straight back into it: the name
+    // could be added to, never replaced.
+    await page.getByTestId("add-read").click();
+    await expect(page.getByTestId("step-type-3")).toHaveText("read");
+    await page.getByTestId("step-edit-3").click();
+
+    const name = page.getByTestId("step-output-name-input-3");
+    await expect(name).toHaveValue("valore");
+    await name.fill("");
+    await expect(name, "an emptied field must stay empty").toHaveValue("");
+    await name.fill("costo_della_cover");
+    await expect(name).toHaveValue("costo_della_cover");
+  });
+
+  test("refuses a result name where it is typed, not after the save", async ({ page }) => {
+    // The server accepts letters, digits and underscores. A name with spaces in
+    // it was accepted by the form, and Save answered "Invalid steps" with nothing
+    // pointing at the field that caused it — the rule a payload is built against
+    // has to be enforced where it is built.
+    await page.getByTestId("add-read").click();
+    await page.getByTestId("step-edit-3").click();
+    await page.getByTestId("step-output-name-input-3").fill("costo della cover");
+
+    const problem = page.getByTestId("step-output-name-error-3");
+    await expect(problem).toBeVisible();
+
+    await page.getByTestId("step-form-close").click();
+    await page.getByTestId("save-steps").click();
+    await expect(page.getByTestId("recorder-error")).toContainText(/nome del risultato/i);
+    expect(
+      (await client.getWorkflow(workflowId)).steps,
+      "nothing may be saved while a step cannot be"
+    ).toHaveLength(3);
+
+    // Corrected, the same step saves.
+    await page.getByTestId("step-edit-3").click();
+    await page.getByTestId("step-output-name-input-3").fill("costo_della_cover");
+    await expect(page.getByTestId("step-output-name-error-3")).toBeHidden();
+    await page.getByTestId("step-selector-value-3").fill("#price");
+    await save(page);
+
+    const stored = await client.getWorkflow(workflowId);
+    expect(stored.steps[3]).toMatchObject({ type: "read", outputName: "costo_della_cover" });
+  });
+
+  test("refuses two live reads filing under one name", async ({ page }) => {
+    // Names are the only thing that tells two results apart. The server refuses
+    // the pair; the editor composes the list, so it has to refuse it too — and
+    // point at the step that collided rather than at the list as a whole.
+    await page.getByTestId("add-read").click();
+    await page.getByTestId("step-edit-3").click();
+    await page.getByTestId("step-output-name-input-3").fill("prezzo");
+    await page.getByTestId("step-selector-value-3").fill("#price");
+    await page.getByTestId("step-form-close").click();
+
+    await page.getByTestId("add-read").click();
+    await page.getByTestId("step-edit-4").click();
+    await page.getByTestId("step-output-name-input-4").fill("prezzo");
+    await page.getByTestId("step-selector-value-4").fill("#other-price");
+    await page.getByTestId("step-form-close").click();
+
+    await page.getByTestId("save-steps").click();
+    await expect(page.getByTestId("recorder-error")).toContainText("già usato");
+    expect((await client.getWorkflow(workflowId)).steps).toHaveLength(3);
+
+    // One of them renamed, both are saved.
+    await page.getByTestId("step-edit-4").click();
+    await page.getByTestId("step-output-name-input-4").fill("prezzo_scontato");
+    await save(page);
+
+    const stored = await client.getWorkflow(workflowId);
+    expect(stored.steps.map((s) => s.outputName).filter(Boolean)).toEqual([
+      "prezzo",
+      "prezzo_scontato"
+    ]);
+  });
+
   test("runs the whole workflow from the editor", async ({ page }) => {
     await page.getByTestId("run-now").click();
     await expect(page.getByTestId("execution-detail")).toBeVisible({ timeout: 30_000 });

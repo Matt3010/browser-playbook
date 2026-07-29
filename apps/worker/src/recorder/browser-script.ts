@@ -163,25 +163,39 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     return null;
   }
 
+  /**
+   * The last resort: a path down the document to an element nothing else can
+   * name. It goes all the way to the top on purpose.
+   *
+   * A path that stops partway is not a place, it is a *shape*: `div:nth-of-type(7)
+   * > div > img` reads as "a seventh div, a div, an image" and is just as true of
+   * a picture in the page as of an icon inside a cookie banner that appears a
+   * second later. The workflow then stops on an ambiguity the page never really
+   * had — or, worse, would act on whichever came first. Anchored at `html`, the
+   * path names one element in one document.
+   *
+   * The price is length, and brittleness to anything that moves an ancestor. That
+   * is the right trade here: this path is only ever reached when there is no id,
+   * no accessible name and no stable attribute to use, and a selector that breaks
+   * loudly beats one that quietly matches something else.
+   */
   function cssPath(el: Element): string {
     const parts: string[] = [];
     let current: Element | null = el;
-    while (current && current.nodeType === 1 && parts.length < 8) {
+    while (current && current.nodeType === 1) {
       let part = tagOf(current);
       const parent: Element | null = current.parentElement;
-      if (!parent) {
-        parts.unshift(part);
-        break;
-      }
-      const siblings = Array.prototype.filter.call(
-        parent.children,
-        (c: Element) => tagOf(c) === part
-      ) as Element[];
-      if (siblings.length > 1) {
-        part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+      if (parent) {
+        const siblings = Array.prototype.filter.call(
+          parent.children,
+          (c: Element) => tagOf(c) === part
+        ) as Element[];
+        if (siblings.length > 1) {
+          part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
+        }
       }
       parts.unshift(part);
-      if (tagOf(parent) === "body" || tagOf(parent) === "html") break;
+      if (!parent) break;
       current = parent;
     }
     return parts.join(" > ");

@@ -18,7 +18,7 @@ import {
 } from "@/lib/api";
 import { mergeRecording } from "@/lib/recording";
 import { describeCron, describeRecurrence, WEEKDAYS } from "@/lib/recurrence";
-import { StepEditor } from "@/components/StepEditor";
+import { StepEditor, stepListProblems } from "@/components/StepEditor";
 import { VncViewer, type VncStatus } from "@/components/VncViewer";
 
 export default function WorkflowDetailPage({ params }: { params: { id: string } }) {
@@ -186,7 +186,12 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     try {
       return await action();
     } catch (err) {
-      const message = err instanceof ApiError ? err.message : (err as Error).message;
+      // The server says which step and why in `details`; showing only `error`
+      // turned a precise refusal into "Invalid steps" and left the user hunting.
+      const message =
+        err instanceof ApiError
+          ? [err.message, ...(err.details ?? [])].join(" — ")
+          : (err as Error).message;
       setError(message);
       log(`ERRORE: ${message}`);
       return undefined;
@@ -455,6 +460,12 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
    * fails on the first field it has to fill.
    */
   async function persistSteps(): Promise<Step[]> {
+    // A rule the server enforces is enforced here, where the payload is built,
+    // and before anything is written: "Esegui adesso" saves too, so a check that
+    // lived in Save alone would not cover both ways in.
+    const problems = stepListProblems(steps);
+    if (problems.length > 0) throw new Error(problems.join("; "));
+
     if (session) {
       const result = await api.post<{ saved: string[]; kept: string[] }>(
         `/sessions/${session.sessionId}/credentials`,
@@ -542,9 +553,29 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     });
   }
 
+  /**
+   * Why this instant cannot be scheduled, or null. The server refuses anything
+   * that is not at least a second away and anything beyond a year, and a form
+   * that can describe a refusal has to say so before the click.
+   */
+  function runAtProblem(): string | null {
+    if (!runAt) return null;
+    const when = new Date(runAt).getTime();
+    if (!Number.isFinite(when)) return "Data e ora non valide";
+    const delay = when - Date.now();
+    if (delay < 1000) return "La data indicata è già passata";
+    if (delay > 365 * 24 * 60 * 60 * 1000) return "La data deve stare entro un anno";
+    return null;
+  }
+
   async function schedule() {
     if (!runAt) {
       setError("Indica data e ora dell'esecuzione");
+      return;
+    }
+    const problem = runAtProblem();
+    if (problem) {
+      setError(problem);
       return;
     }
     await run("schedule", async () => {
@@ -1028,10 +1059,20 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
               data-testid="schedule-timezone"
             />
           </label>
-          <button className="btn" onClick={schedule} disabled={busy !== null} data-testid="schedule-submit">
+          <button
+            className="btn"
+            onClick={schedule}
+            disabled={busy !== null || runAtProblem() !== null}
+            data-testid="schedule-submit"
+          >
             Pianifica
           </button>
         </div>
+        {runAtProblem() ? (
+          <p className="text-xs text-red-700" data-testid="schedule-error">
+            {runAtProblem()}
+          </p>
+        ) : null}
 
         {schedules.length === 0 ? (
           <p className="text-sm text-slate-500">Nessuna pianificazione.</p>

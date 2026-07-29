@@ -2,7 +2,7 @@ import type { FastifyInstance } from "fastify";
 import {
   isRecurringInput,
   isRunnableStepList,
-  StepSchema,
+  stepFromRow,
   validateRecurringSchedule,
   validateSchedule
 } from "@app/workflow-schema";
@@ -40,20 +40,7 @@ export async function scheduleRoutes(app: FastifyInstance): Promise<void> {
       where: { workflowId: workflow.id },
       orderBy: { position: "asc" }
     });
-    const steps = stepRows.map((row) =>
-      StepSchema.parse({
-        id: row.id,
-        type: row.type,
-        name: row.name,
-        pageId: row.pageId,
-        pageOrigin: row.pageOrigin,
-        selector: row.selectorJson ?? null,
-        value: row.valueTemplate,
-        timeoutMs: row.timeoutMs,
-        enabled: row.enabled,
-        isFinal: row.isFinal
-      })
-    );
+    const steps = stepRows.map(stepFromRow);
     if (!isRunnableStepList(steps)) {
       return reply.code(409).send({ error: "Workflow has no enabled steps to run" });
     }

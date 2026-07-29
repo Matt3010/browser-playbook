@@ -407,6 +407,23 @@ describe("cloning a workflow", () => {
           },
           {
             id: stepId(),
+            type: "read",
+            name: "Leggi il totale",
+            pageId: "main",
+            selector: {
+              strategy: "id",
+              value: "order-total",
+              fallback: null,
+              pageId: "main",
+              frame: null
+            },
+            value: null,
+            outputName: "totale",
+            timeoutMs: 10000,
+            enabled: true
+          },
+          {
+            id: stepId(),
             type: "click",
             name: "Clicca Acquista ora",
             pageId: "main",
@@ -455,9 +472,18 @@ describe("cloning a workflow", () => {
     ]);
 
     expect(after).toHaveLength(before.length);
-    expect(after.map((s) => s.name)).toEqual(before.map((s) => s.name));
-    expect(after.map((s) => s.valueTemplate)).toEqual(before.map((s) => s.valueTemplate));
-    expect(after[2].isFinal, "the closing action stays a closing action").toBe(true);
+    // Every column, not a list of the ones somebody remembered: a clone that
+    // copies all but one loses exactly the field added last, in silence.
+    const content = (row: Record<string, unknown>) => {
+      const { id, workflowId, createdAt, updatedAt, ...columns } = row;
+      void id;
+      void workflowId;
+      void createdAt;
+      void updatedAt;
+      return columns;
+    };
+    expect(after.map(content)).toEqual(before.map(content));
+    expect(after[3].isFinal, "the closing action stays a closing action").toBe(true);
 
     // Ids are identity, not content: two workflows may not share a step row.
     for (const step of after) {

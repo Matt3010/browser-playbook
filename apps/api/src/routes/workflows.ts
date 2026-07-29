@@ -126,20 +126,21 @@ export async function workflowRoutes(app: FastifyInstance): Promise<void> {
         startUrl: workflow.startUrl,
         status: workflow.status,
         steps: {
-          // The copy carries every column but the identity: new ids, same content.
-          create: steps.map((step) => ({
-            position: step.position,
-            type: step.type,
-            name: step.name,
-            pageId: step.pageId,
-            pageOrigin: step.pageOrigin,
-            selectorJson: (step.selectorJson ?? null) as never,
-            valueTemplate: step.valueTemplate,
-            outputName: step.outputName,
-            timeoutMs: step.timeoutMs,
-            enabled: step.enabled,
-            isFinal: step.isFinal
-          }))
+          // Every column but the identity, taken as a whole rather than listed:
+          // a list is a copy of the schema that has to be remembered, and the one
+          // that came before this forgot `outputName` the day it was added.
+          create: steps.map(
+            ({
+              id: _id,
+              workflowId: _workflowId,
+              createdAt: _createdAt,
+              updatedAt: _updatedAt,
+              ...columns
+            }) => ({
+              ...columns,
+              selectorJson: (columns.selectorJson ?? null) as never
+            })
+          )
         }
       }
     });

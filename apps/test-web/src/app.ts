@@ -270,6 +270,44 @@ ${summary}`
     );
   });
 
+  // ---- an element only a structural path can name -------------------------
+
+  /**
+   * A product image with nothing to name it by — no id, no alt, no label — so the
+   * recorder has to fall back to a structural path. It sits directly under body,
+   * as the seventh div, which is the shape a real page produced.
+   *
+   * With `?banner=1` a cookie banner is on the page as well, and inside it the
+   * same shape repeats: seven divs, a wrapper, an image. A path that is not
+   * anchored to the top of the document matches both, and the run stops on an
+   * ambiguity that the page never really had.
+   *
+   * The layout wrapper is deliberately not used here: `main` would sit between
+   * body and the element and hide the very thing this page is about.
+   */
+  app.get("/structural", async (request, reply) => {
+    const withBanner = (request.query as { banner?: string }).banner === "1";
+    const fillers = Array.from({ length: 6 }, (_, i) => `<div>Riga ${i + 1}</div>`).join("\n");
+    const banner = withBanner
+      ? `<div id="cookie-banner">
+  ${fillers}
+  <div><div><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" width="60" height="60" style="background:#c9ced6;display:block"></div></div>
+  <button id="reject-cookies" type="button">Rifiuta cookies</button>
+</div>`
+      : "";
+    return reply.type("text/html").send(`<!doctype html>
+<html lang="it">
+<head><meta charset="utf-8"><title>Percorso strutturale - test-web</title></head>
+<body>
+<p>Intestazione</p>
+${fillers}
+<div id="product"><div><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="" width="60" height="60" style="background:#c9ced6;display:block"></div></div>
+<div><p>Prezzo: <span>EUR 4,32</span></p></div>
+${banner}
+</body>
+</html>`);
+  });
+
   // ---- a panel that closes the way a real site's search panel closes -------
 
   /**

@@ -116,6 +116,62 @@ export function describeValue(
   });
 }
 
+const DEFAULT_OUTPUT_NAME = "valore";
+
+/**
+ * The shape of a result name, and why it is written here rather than imported:
+ * the browser bundle deliberately holds no workspace package. A copy can drift
+ * from the rule the server enforces, so an e2e types a name the server refuses
+ * and one it accepts, and holds the two to the same answer.
+ */
+const OUTPUT_NAME_PATTERN = /^[a-zA-Z][a-zA-Z0-9_]*$/;
+
+/**
+ * Why this step cannot be saved as it stands, or null.
+ *
+ * The editor composes the payload, so it has to enforce what the server will
+ * check: left to the save, the answer is "Invalid steps" with nothing pointing
+ * at the field that caused it.
+ */
+export function outputNameProblem(step: Step): string | null {
+  if (step.type !== "read") return null;
+  const name = step.outputName ?? "";
+  if (name.length === 0) return "manca il nome del risultato";
+  if (!OUTPUT_NAME_PATTERN.test(name)) {
+    return (
+      "il nome del risultato può contenere solo lettere, cifre e underscore, " +
+      "e deve iniziare con una lettera"
+    );
+  }
+  return null;
+}
+
+/**
+ * Everything about this list the server would refuse, said in the language of
+ * the person who built it. Names are the only thing that tells two results
+ * apart, so two live reads may not share one — a disabled read produces nothing
+ * and cannot collide with anything.
+ */
+export function stepListProblems(steps: Step[]): string[] {
+  const problems: string[] = [];
+  const seen = new Map<string, number>();
+  steps.forEach((step, index) => {
+    const problem = outputNameProblem(step);
+    if (problem) problems.push(`Step ${index + 1} "${step.name}": ${problem}`);
+    if (step.type !== "read" || !step.enabled || !step.outputName) return;
+    const first = seen.get(step.outputName);
+    if (first !== undefined) {
+      problems.push(
+        `Step ${index + 1} "${step.name}": il nome del risultato "${step.outputName}" ` +
+          `è già usato dallo step ${first + 1}`
+      );
+      return;
+    }
+    seen.set(step.outputName, index);
+  });
+  return problems;
+}
+
 const VERIFICATION_LABEL: Record<string, { text: string; className: string }> = {
   ok: { text: "verificato", className: "bg-green-100 text-green-700" },
   ambiguous: { text: "selector ambiguo", className: "bg-red-100 text-red-700" },
@@ -137,7 +193,17 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
 
   function update(id: string, patch: Partial<Step>) {
     onChange(
-      steps.map((step) => (step.id === id ? withConsistentOutputName({ ...step, ...patch }) : step))
+      steps.map((step) => {
+        if (step.id !== id) return step;
+        const next = { ...step, ...patch };
+        // The default belongs to the moment a step *becomes* a read, not to every
+        // edit of one: applied on each keystroke it put the name straight back
+        // into a field the user had just emptied, so it could never be replaced.
+        if (patch.type === undefined || patch.type === step.type) return next;
+        return next.type === "read"
+          ? { ...next, outputName: next.outputName || DEFAULT_OUTPUT_NAME }
+          : { ...next, outputName: null };
+      })
     );
   }
 
@@ -181,18 +247,6 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
     onChange(steps.map((step, i) => (i >= index ? { ...step, enabled } : step)));
   }
 
-  /**
-   * A result name belongs to a `read` and to nothing else: the server requires it
-   * on one and refuses it on the other. Changing the type in the form has to keep
-   * that true, or Save answers "Invalid steps" for a field the user cannot see.
-   */
-  function withConsistentOutputName(step: Step): Step {
-    if (step.type === "read") {
-      return step.outputName ? step : { ...step, outputName: "valore" };
-    }
-    return step.outputName ? { ...step, outputName: null } : step;
-  }
-
   function addRead() {
     insert({
       id: newId(),
@@ -201,7 +255,7 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
       pageId: "main",
       selector: { strategy: "text", value: "", fallback: null, pageId: "main", frame: null },
       value: null,
-      outputName: "valore",
+      outputName: DEFAULT_OUTPUT_NAME,
       timeoutMs: 10000,
       enabled: true,
       isFinal: false
@@ -467,6 +521,14 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
                       placeholder="saldo"
                       data-testid={`step-output-name-input-${editingIndex}`}
                     />
+                    {outputNameProblem(editing) ? (
+                      <span
+                        className="mt-1 block text-xs text-red-700"
+                        data-testid={`step-output-name-error-${editingIndex}`}
+                      >
+                        {outputNameProblem(editing)}
+                      </span>
+                    ) : null}
                   </label>
                 ) : (
                   <label className="block">

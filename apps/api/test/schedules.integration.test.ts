@@ -7,6 +7,7 @@ import {
   createWorkflow,
   gotoStep,
   clickStep,
+  stepId,
   type TestContext,
   type AuthedUser
 } from "./helpers";
@@ -48,6 +49,60 @@ async function schedule(workflowId: string, runAt: string, timezone = "Europe/Ro
     payload: { runAt, timezone }
   });
 }
+
+describe("scheduling a workflow that reads a datum", () => {
+  // The sixth hand-written copy of the same row translation. Five were unified
+  // when `outputName` was added; this one was missed, so scheduling a workflow
+  // with a read step threw a raw ZodError and answered "Internal server error".
+  async function workflowThatReads() {
+    const workflow = await createWorkflow(ctx.app, user.cookie, "Reads a price");
+    await ctx.app.inject({
+      method: "PUT",
+      url: `/api/workflows/${workflow.id}/steps`,
+      headers: { cookie: user.cookie },
+      payload: {
+        steps: [
+          gotoStep("http://test-web:3001/elements"),
+          {
+            id: stepId(),
+            type: "read",
+            name: "Leggi il prezzo",
+            pageId: "main",
+            selector: {
+              strategy: "id",
+              value: "size-result",
+              fallback: null,
+              pageId: "main",
+              frame: null
+            },
+            value: null,
+            outputName: "prezzo",
+            timeoutMs: 10000,
+            enabled: true
+          }
+        ]
+      }
+    });
+    return workflow;
+  }
+
+  it("accepts a one-off schedule", async () => {
+    const workflow = await workflowThatReads();
+    const response = await schedule(workflow.id, inFuture(60_000));
+    expect(response.statusCode, response.body).toBe(201);
+  });
+
+  it("accepts a recurring schedule", async () => {
+    const workflow = await workflowThatReads();
+    const response = await ctx.app.inject({
+      method: "POST",
+      url: `/api/workflows/${workflow.id}/schedules`,
+      headers: { cookie: user.cookie },
+      payload: { recurrence: { kind: "hours", every: 2, minute: 0 }, timezone: "Europe/Rome" }
+    });
+    expect(response.statusCode, response.body).toBe(201);
+  });
+});
 
 describe("single future schedule", () => {
   it("creates the schedule, the queued execution and a delayed persistent job", async () => {

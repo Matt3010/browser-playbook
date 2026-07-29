@@ -948,6 +948,68 @@ test.describe("verifying a recording as it happens", () => {
     }
   });
 
+  test("a structural path names one element in the whole document, not a shape", async () => {
+    // An element with nothing to name it by — no id, no accessible name, no
+    // stable attribute — leaves only a structural path. The path used to be
+    // written down as a *shape*: "a seventh div, a div, an image", true of the
+    // product picture and equally true of the icon inside a cookie banner that
+    // appears a second later. Two matches, and the run stops on an ambiguity the
+    // page never really had. The path has to be anchored where it was computed.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/structural`);
+    let recordedSelector: Record<string, unknown> | null = null;
+    try {
+      await client.setRecording(session.sessionId, true);
+      await client.interact(session.sessionId, { kind: "click", selector: "#product img" });
+
+      await expect
+        .poll(
+          async () =>
+            (await client.getRecording(session.sessionId)).steps.filter((s) => s.type === "click")
+              .length,
+          { timeout: 20_000 }
+        )
+        .toBeGreaterThan(0);
+
+      const recording = await client.getRecording(session.sessionId);
+      const click = recording.steps.find((s) => s.type === "click");
+      recordedSelector = click!.selector as unknown as Record<string, unknown>;
+      expect(recordedSelector, "nothing else can name this element").toMatchObject({
+        strategy: "css"
+      });
+      expect(
+        String(recordedSelector.value),
+        "the path must say where it starts, or it names a shape"
+      ).toMatch(/^(body|html)\s*>/);
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+
+    // And the proof of why it matters: the same click, replayed on the same page
+    // with the banner on it, must still land on the product picture.
+    const workflow = await client.createWorkflow(
+      `Percorso strutturale ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/structural?banner=1`
+    );
+    await client.putSteps(workflow.id, [
+      step({
+        type: "goto",
+        name: "Vai alla pagina con il banner",
+        value: `${TEST_WEB_INTERNAL_URL}/structural?banner=1`
+      }),
+      step({
+        type: "click",
+        name: "Clicca l'immagine del prodotto",
+        selector: recordedSelector as never
+      })
+    ]);
+
+    const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(
+      execution.status,
+      `execution failed: ${execution.errorMessage ?? ""}`
+    ).toBe("completed");
+  });
+
   test("proposes the selector it is actually going to record", async () => {
     // The recorder UI shows a proposed selector for the hovered/selected element.
     // It used to be computed by a second implementation living inside the injected

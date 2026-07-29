@@ -498,6 +498,37 @@ test.describe("single future schedule", () => {
     });
   });
 
+  test("says a date in the past is in the past, before the click", async ({ page }) => {
+    // The server refuses anything less than a second away, and the page showed
+    // only "Invalid schedule" for it: the reason was in the answer all along, and
+    // a form that can describe a refusal must say so before it is sent.
+    const workflow = await client.createWorkflow(
+      `Data passata ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    await client.putSteps(workflow.id, [gotoStep(`${TEST_WEB_INTERNAL_URL}/elements`)]);
+
+    await page.goto("/login");
+    await page.getByLabel("Email").fill("test@example.com");
+    await page.getByLabel("Password").fill("TestPassword123!");
+    await page.getByRole("button", { name: "Login" }).click();
+    await expect(page.getByTestId("dashboard")).toBeVisible();
+    await page.goto(`/workflows/${workflow.id}`);
+
+    const past = new Date(Date.now() - 60 * 60_000);
+    const asLocal = (date: Date) =>
+      new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+
+    await page.getByTestId("schedule-run-at").fill(asLocal(past));
+    await expect(page.getByTestId("schedule-error")).toContainText("passata");
+    await expect(page.getByTestId("schedule-submit")).toBeDisabled();
+
+    // A future instant clears it, and the schedule can be made.
+    await page.getByTestId("schedule-run-at").fill(asLocal(new Date(Date.now() + 10 * 60_000)));
+    await expect(page.getByTestId("schedule-error")).toBeHidden();
+    await expect(page.getByTestId("schedule-submit")).toBeEnabled();
+  });
+
   test("the scheduling UI creates and cancels a schedule", async ({ page }) => {
     const workflow = await client.createWorkflow(
       `Pianifica da UI ${Date.now()}`,
