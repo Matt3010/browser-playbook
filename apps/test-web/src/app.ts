@@ -117,6 +117,56 @@ ${error ? `<p class="error" data-testid="login-error">${escapeHtml(error)}</p>` 
     return reply.type("text/html").send(loginPage());
   });
 
+  /*
+   * The other way a site keeps you signed in: a token in localStorage, checked by
+   * the page's own script rather than by the server.
+   *
+   * A single-page application does this as a matter of course, and no cookie is
+   * involved — so a browser whose state was borrowed cookie-only arrives here as a
+   * stranger. The check runs in the page and redirects, exactly as such an
+   * application does before it renders anything.
+   */
+  const TOKEN_KEY = "app_token";
+
+  app.get("/spa/login", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Accesso SPA - test-web",
+        `<h1>Accesso</h1>
+<p data-testid="spa-login">Questa pagina tiene la sessione in localStorage.</p>
+<button id="spa-signin" type="button" data-testid="spa-signin">Entra</button>
+<script>
+  document.getElementById("spa-signin").addEventListener("click", function () {
+    window.localStorage.setItem(${JSON.stringify(TOKEN_KEY)}, "spa-token-" + Date.now());
+    window.location.href = "/spa/area";
+  });
+</script>`
+      )
+    )
+  );
+
+  app.get("/spa/area", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Area SPA - test-web",
+        `<h1>Area riservata</h1>
+<div id="spa-guard">
+  <p data-testid="spa-checking">Verifica della sessione…</p>
+</div>
+<script>
+  (function () {
+    if (!window.localStorage.getItem(${JSON.stringify(TOKEN_KEY)})) {
+      window.location.replace("/spa/login");
+      return;
+    }
+    document.getElementById("spa-guard").innerHTML =
+      '<p data-testid="spa-welcome">Bentornato nell\\'area riservata.</p>';
+  })();
+</script>`
+      )
+    )
+  );
+
   app.post("/login", async (request, reply) => {
     const state = getState();
     state.loginAttempts += 1;
@@ -475,6 +525,14 @@ ${banner}
   <button id="disabled-button" type="button" disabled>Bottone disabilitato</button>
   <input id="disabled-input" type="text" value="non modificabile" disabled>
 </div>
+
+<!--
+  A price the way a real product page carries one: nested divs with no id, no test
+  id, no accessible name, and text that is itself volatile, so every candidate the
+  recorder has is refused and only the structural path is left. This is the shape
+  that makes a recorder store a path of nth-of-type steps and call it verified.
+-->
+<div><div><div><span>€ 1.749,00</span></div></div></div>
 
 <!--
   A required field marked the way real applications mark one: an asterisk that is

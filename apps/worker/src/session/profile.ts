@@ -129,14 +129,30 @@ const TRANSIENT_PROFILE_ENTRIES = [
  */
 const COOKIE_STORE_ENTRIES = ["Cookies", "Cookies-journal"];
 
+/**
+ * Where Chromium keeps the local storage on disk.
+ *
+ * Same reasoning as the cookie store and the same lazy writer: leveldb is flushed
+ * when it suits it, so a copy taken right after a login can be of a store that
+ * never saw the token — which matters for every site that keeps its session there
+ * rather than in a cookie.
+ */
+const LOCAL_STORAGE_ENTRIES = ["Local Storage"];
+
 /** True when this entry of a profile is worth copying for a run. */
 export function isCopyableProfileEntry(
   relativePath: string,
-  options: { withoutCookies?: boolean } = {}
+  options: { withoutCookies?: boolean; withoutLocalStorage?: boolean } = {}
 ): boolean {
   const parts = relativePath.split(/[\\/]/);
   if (parts.some((part) => TRANSIENT_PROFILE_ENTRIES.includes(part))) return false;
   if (options.withoutCookies && parts.some((part) => COOKIE_STORE_ENTRIES.includes(part))) {
+    return false;
+  }
+  if (
+    options.withoutLocalStorage &&
+    parts.some((part) => LOCAL_STORAGE_ENTRIES.includes(part))
+  ) {
     return false;
   }
   return true;
@@ -155,7 +171,7 @@ export function isCopyableProfileEntry(
 export async function copyProfileForReading(
   profileDir: string,
   sessionId: string,
-  options: { withoutCookies?: boolean } = {}
+  options: { withoutCookies?: boolean; withoutLocalStorage?: boolean } = {}
 ): Promise<string> {
   const target = await mkdtemp(path.join(tmpdir(), `profile-copy-${sessionId}-`));
   await cp(profileDir, target, {
@@ -171,15 +187,28 @@ export async function copyProfileForReading(
   return target;
 }
 
+/** One origin's local storage, as `context.storageState()` reports it. */
+export interface OriginStorage {
+  origin: string;
+  localStorage: Array<{ name: string; value: string }>;
+}
+
+/** What a live browser can tell us about itself, as opposed to what its files say. */
+export interface LiveBrowserState {
+  cookies: Cookie[];
+  origins: OriginStorage[];
+}
+
 /**
  * The state a session takes when the browser it wants is already open.
  *
  * `profileDir` is a throwaway copy, or null when there was nothing to copy;
- * `cookies` are installed before the first navigation.
+ * `cookies` and `origins` are installed before the first navigation.
  */
 export interface BorrowedProfile {
   profileDir: string | null;
   cookies: Cookie[];
+  origins: OriginStorage[];
 }
 
 /**
@@ -193,34 +222,47 @@ export interface BorrowedProfile {
  * after recording was of a profile that had never logged in. A cookie with no
  * expiry never reaches the disk at all.
  *
- * So the cookies are asked of the browser that holds them, which knows what it
- * has, and the files supply the rest — localStorage, preferences, the things that
- * make the copy the same visitor. Two failures are survivable and both are
- * survived: a holder that cannot answer leaves the disk as the only source, and a
- * copy that cannot be taken still lets the cookies through, because the cookies
- * are the login and the rest is comfort.
+ * So the session state — cookies, and the local storage where a modern
+ * application is just as likely to keep its token — is asked of the browser that
+ * holds it, which knows what it has, and the files supply the rest: preferences,
+ * history, the things that make the copy the same visitor. What the live browser
+ * answers for is then deliberately *left out* of the copy, because a stale value
+ * beating a fresh one is the defect rather than a safety net — but only what it
+ * actually answered for. A file is dropped when there is something to replace it
+ * with, never on the strength of having asked.
+ *
+ * Two failures are survivable and both are survived: a holder that cannot answer
+ * leaves the disk as the only source, and a copy that cannot be taken still lets
+ * the state through, because the state is the login and the rest is comfort.
  */
 export async function borrowProfileForSession(input: {
   profileDir: string;
   sessionId: string;
-  /** Asks the browser holding the profile for its cookies; null when it cannot say. */
-  liveCookies: () => Promise<Cookie[] | null>;
+  /** Asks the browser holding the profile what it has; null when it cannot say. */
+  liveState: () => Promise<LiveBrowserState | null>;
   onProblem?: (err: unknown, what: string) => void;
 }): Promise<BorrowedProfile> {
-  let cookies: Cookie[] | null = null;
+  let live: LiveBrowserState | null = null;
   try {
-    cookies = await input.liveCookies();
+    live = await input.liveState();
   } catch (err) {
-    input.onProblem?.(err, "Could not read the cookies of the browser holding this profile");
+    input.onProblem?.(err, "Could not read the state of the browser holding this profile");
   }
 
+  const copyOptions = {
+    withoutCookies: live !== null,
+    // Only when there is something to put in its place. `storageState` reporting no
+    // origins at all is possible, and dropping the leveldb then would turn a
+    // possibly stale login into no login whatsoever.
+    withoutLocalStorage: (live?.origins.length ?? 0) > 0
+  };
+
+  const borrowed = { cookies: live?.cookies ?? [], origins: live?.origins ?? [] };
   try {
-    const copied = await copyProfileForReading(input.profileDir, input.sessionId, {
-      withoutCookies: cookies !== null
-    });
-    return { profileDir: copied, cookies: cookies ?? [] };
+    const copied = await copyProfileForReading(input.profileDir, input.sessionId, copyOptions);
+    return { profileDir: copied, ...borrowed };
   } catch (err) {
     input.onProblem?.(err, "Could not copy the workflow's browser profile");
-    return { profileDir: null, cookies: cookies ?? [] };
+    return { profileDir: null, ...borrowed };
   }
 }

@@ -147,6 +147,27 @@ export function outputNameProblem(step: Step): string | null {
 }
 
 /**
+ * The range the server accepts for a step timeout, copied here for the same
+ * reason as the result-name pattern above, and guarded the same way by an e2e.
+ */
+const TIMEOUT_MIN_MS = 100;
+const TIMEOUT_MAX_MS = 120_000;
+
+/**
+ * Why this step's timeout cannot be saved as it stands, or null.
+ *
+ * The field has always been in the form and carried no bounds, so a 50 looked
+ * accepted and came back as "Invalid steps" after the click, pointing at nothing.
+ */
+export function timeoutProblem(step: Step): string | null {
+  const ms = step.timeoutMs;
+  if (!Number.isInteger(ms) || ms < TIMEOUT_MIN_MS || ms > TIMEOUT_MAX_MS) {
+    return `il timeout deve essere un numero intero fra ${TIMEOUT_MIN_MS} e ${TIMEOUT_MAX_MS} ms`;
+  }
+  return null;
+}
+
+/**
  * Everything about this list the server would refuse, said in the language of
  * the person who built it. Names are the only thing that tells two results
  * apart, so two live reads may not share one — a disabled read produces nothing
@@ -156,6 +177,8 @@ export function stepListProblems(steps: Step[]): string[] {
   const problems: string[] = [];
   const seen = new Map<string, number>();
   steps.forEach((step, index) => {
+    const timeout = timeoutProblem(step);
+    if (timeout) problems.push(`Step ${index + 1} "${step.name}": ${timeout}`);
     const problem = outputNameProblem(step);
     if (problem) problems.push(`Step ${index + 1} "${step.name}": ${problem}`);
     if (step.type !== "read" || !step.enabled || !step.outputName) return;
@@ -351,6 +374,21 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
                         </span>
                       );
                     })()}
+                    {/*
+                     * Separate from the verification on purpose: a positional
+                     * selector resolves to one element and is therefore reported
+                     * "verificato", which is true today and says nothing about
+                     * tomorrow. This is the warning that used to be missing.
+                     */}
+                    {verifications[index]?.positional ? (
+                      <span
+                        className="badge bg-amber-100 text-amber-800"
+                        title="Questo step trova l'elemento in base alla sua posizione nella pagina, perché non ha nulla che lo identifichi: nessun test id, nessun nome accessibile, nessun id utile. Funziona adesso e si rompe appena la pagina viene riorganizzata. Se puoi, registra un elemento vicino che abbia un nome."
+                        data-testid={`step-positional-${index}`}
+                      >
+                        posizionale
+                      </span>
+                    ) : null}
                     {step.isFinal ? (
                       <span
                         className="badge bg-amber-100 text-amber-800"
@@ -549,9 +587,27 @@ export function StepEditor({ steps, onChange, verifications = [], values = [] }:
                   <input
                     className="input"
                     type="number"
+                    min={TIMEOUT_MIN_MS}
+                    max={TIMEOUT_MAX_MS}
+                    step={100}
                     value={editing.timeoutMs}
                     onChange={(e) => update(editing.id, { timeoutMs: Number(e.target.value) })}
+                    data-testid={`step-timeout-input-${editingIndex}`}
                   />
+                  {timeoutProblem(editing) ? (
+                    <span
+                      className="mt-1 block text-xs text-red-600"
+                      data-testid={`step-timeout-error-${editingIndex}`}
+                    >
+                      {timeoutProblem(editing)}
+                    </span>
+                  ) : null}
+                  {editing.type === "goto" ? (
+                    <span className="mt-1 block text-xs text-slate-500">
+                      Per un goto questo è un minimo: una navigazione ha comunque a
+                      disposizione il tempo che serve ad aprire la pagina.
+                    </span>
+                  ) : null}
                 </label>
               </div>
 

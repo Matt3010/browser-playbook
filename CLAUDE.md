@@ -463,6 +463,28 @@ These are the classes of defect this codebase actually produced, so look here fi
   that cannot be taken still lets the cookies through, since the cookies are the
   login and the rest is comfort. The general rule: a file written by a running
   process is a cache of its state, not its state.
+  **And it was only half the state.** A session does not only live in cookies: a
+  single-page application keeps its token in `localStorage` and involves no cookie
+  at all, and the leveldb holding it is flushed exactly as lazily — so the same
+  defect survived in the one place the cookie fix could not reach.
+  `storageState()` supplies it, and it goes in as an `addInitScript`, because a
+  persistent context has no `addLocalStorage`. Three things that script has to be:
+  **synchronous**, since an application reads its token as it boots and awaiting
+  anything would lose the very race the script exists to win, so the values are
+  embedded rather than fetched; **write-if-absent**, because it runs on every
+  navigation and a page that has since changed one of these owns it — re-imposing
+  the borrowed value would undo the run's own work; and **paired with dropping the
+  files it replaces**, a stale value beating a fresh one being the defect rather
+  than a safety net. The last has its own guard, and it is the one worth
+  remembering: **a file is dropped only when there is something to put in its
+  place.** `storageState()` can answer with no origins at all — a persistent context
+  is not its usual subject — and dropping the leveldb on the strength of having
+  *asked* would turn a stale login into no login. The two halves are collected and
+  decided separately so that one failing cannot take the other down. Known limit: a
+  key the page *deletes* comes back on the next navigation; the alternative is a
+  marker of our own left in the site's storage, which is a footprint on somebody
+  else's page. Reproduced with `/spa/login`, which signs in using nothing but
+  `localStorage` and whose own script bounces a stranger back.
   What this deliberately does *not* do is make a cookie outlive what the site
   said: a cookie with no expiry dies when the browser closes, so it crosses to a
   borrowing session — it is read out of memory, where it lives — and does not
@@ -475,25 +497,63 @@ These are the classes of defect this codebase actually produced, so look here fi
   whose default is 10 s. The same function, the same page, and the tighter budget
   on the side that matters — so a real product page on a real connection could be
   recorded and could not be replayed, which is the contradiction this project
-  refuses. Found on a live AliExpress workflow that died with
+  refuses. Found on a live workflow against a heavy storefront, which died with
   `page.goto: Timeout 10000ms exceeded`. `timeoutMs` answers "how long to look for
   an element"; waiting for a document to arrive is a different question and now has
   its own name, `NAVIGATION_TIMEOUT_MS`, used by every navigation there is. It is a
   floor rather than a replacement (`navigationBudgetMs`): a step asking for *more*
-  knows something we do not. A floor was necessary, not merely tidy — the editor
-  has never exposed `timeoutMs`, so every workflow already saved carries 10 000 and
-  changing the default alone would have left them all broken with no user-side
-  repair. Reproduced against `/slow-target` at 14 s, between the old budget and
-  the real one.
-  Its sibling, seen in the same incident and *not* fixed: the step failed at
-  09:59:16 and the user cancelled at 09:59:23, while the runner was still
-  photographing the failure — so `finish` found the row already `cancelled`,
-  declined to overwrite it (deliberately: a cancellation must survive a later
-  failure) and the row now reads "Cancelled by the user", hiding the timeout that
-  had already decided the outcome. The order is knowable — ask `wasCancelled`
-  when the step throws rather than after the cleanup — but the fix has to answer
-  whether a terminal `cancelled` may become `failed`, which is a state-machine
-  question and not a one-liner.
+  knows something we do not, and one asking for less chose that number for
+  element-finding, where a small answer is legitimate. The floor also lifts every
+  workflow already saved — they all carry the 10 000 default — without any of them
+  being recorded again. Reproduced against `/slow-target` at 14 s, between the old
+  budget and the real one.
+  Written first with the justification "the editor never exposed `timeoutMs`",
+  which is simply false: the field is in the step modal and has been all along. It
+  had no `data-testid`, so no e2e touched it and grepping for the testid found
+  nothing — a control no test names is a control that can be overlooked while
+  reading the very file it lives in. The fix survives the correction because it
+  never depended on that claim; the claim was decoration, and decoration that
+  asserts a fact has to be checked like one.
+- **A question about *when*, asked too late to answer.** Its sibling, from the same
+  incident: the step failed at 09:59:16 and the user cancelled at 09:59:23, while
+  the runner was still photographing the failure. `finish` then found the row
+  already `cancelled` and declined to touch it — deliberately, because a
+  cancellation must survive the failure it *causes*, which is the browser being
+  closed out from under the running step. But that guard cannot tell the two apart
+  by looking at the row, because in both cases the row is cancelled by the time it
+  looks. So the operator was told they stopped a run that had stopped by itself,
+  and the reason survived only in the log. `wasCancelled` is now asked at the
+  moment the step throws, before the screenshot and the artifacts: `outcomeWrite`
+  turns that into three cases, and the middle one — cancelled now, not cancelled
+  when it was decided — keeps the status and rescues the reason. The status is
+  never rewritten: the user did press it, and a terminal state must not move
+  underneath them. Doing it also removed a second copy of the same decision, since
+  `handleFailure` wrote the row itself instead of going through `finish` — which is
+  precisely why the gap existed on that path and nowhere else.
+- **A control no test names is a control nobody sees.** The step timeout field has
+  been in the editor from the start, with no bounds while the server accepts only
+  100…120000: a 50 typed into it read as accepted and came back as "Invalid steps"
+  after the click, pointing at nothing — the same class as the closing-action
+  placement. It also had no `data-testid`, so no e2e reached it, and grepping for
+  one found nothing; that is how a whole feature came to be described as missing in
+  a commit message, a code comment and this file, while sitting in the file being
+  read. Bounds now live in `timeoutProblem` beside `outputNameProblem`, the field
+  is named, and an e2e types a value the server refuses and one it accepts.
+  **And that e2e was written wrong first, in a way worth keeping on record.** It
+  asserted that saving produced an error mentioning the timeout — which happens in
+  both worlds, because when the editor does not refuse the *server* does, and the
+  page shows its `details`. It passed with the rule switched off. Asserting the
+  outcome instead of *which side produced it* is the same mistake as validating a
+  requested URL instead of where the navigation landed, turned on the test itself:
+  a test that cannot tell the two roads apart accompanies a fix rather than proving
+  one. It now asserts the two things only the editor can produce — a message under
+  the field while nothing has been sent, and the editor's own wording rather than
+  "Invalid steps".
+  The method that caught it is the point: **switch off the rule and watch the test
+  go red.** Not the call site — removing one `push` left the modal still showing its
+  message, which is a mutilation chosen for convenience rather than the old
+  behaviour. Make the rule itself return "no problem", leave every caller intact,
+  and what fails is then exactly what the rule was buying.
 
 ### Things a test cannot pin down
 
@@ -543,6 +603,14 @@ Rules that matter:
   (the overlay CSS) is computed in Node and passed in, which also makes it testable.
 - Secrets never leave the server. Credential values are returned to the browser
   only for `kind: "variable"`, never for `kind: "secret"`.
+- **The code is site-agnostic, always.** A real site is where a defect is *found*,
+  never what a fix is *shaped by*. Every rule asks a question about a shape — does
+  this value walk the document, does this text change by itself, does this id look
+  generated — and none may ask which site it is looking at. No hostname, no
+  vendor-specific branch, no allowance made for one storefront. The fixtures in
+  `apps/test-web` follow the same rule: they reproduce the *shape* a real page had,
+  and describe it as a shape, because a fixture named after a company invites the
+  next reader to tune the product to that company.
 - A selector must match exactly one element. Ambiguous means stop the workflow;
   never pick the first match. There is no auto-healing.
 - Stop at the first failing step. No retries, no resume.

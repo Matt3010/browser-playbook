@@ -128,6 +128,22 @@ describe("isCopyableProfileEntry", () => {
     expect(isCopyableProfileEntry("Default\\Cookies")).toBe(true);
   });
 
+  it("leaves the local storage behind when a live browser will supply it", () => {
+    // Same reasoning as the cookie store, and the same lazy writer: leveldb is
+    // flushed when it feels like it, so a copy taken right after a login can be of
+    // a store that never saw the token.
+    for (const store of [
+      "Local Storage/leveldb/000003.log",
+      "Default/Local Storage/leveldb/CURRENT"
+    ]) {
+      expect(isCopyableProfileEntry(store, { withoutLocalStorage: true }), store).toBe(false);
+    }
+    expect(isCopyableProfileEntry("Preferences", { withoutLocalStorage: true })).toBe(true);
+    // Only what was asked for: cookies are a separate decision with a separate
+    // source, and one failing must not silently drop the other.
+    expect(isCopyableProfileEntry("Default/Cookies", { withoutLocalStorage: true })).toBe(true);
+  });
+
   it("leaves the cookie store behind when a live browser will supply the cookies", () => {
     // What is on disk is then not just redundant but wrong: a cookie deleted in
     // the live browser is still in its file, and would come back in the copy.
@@ -153,12 +169,23 @@ describe("borrowProfileForSession", () => {
   async function profileOnDisk(): Promise<string> {
     const dir = await mkdtemp(path.join(tmpdir(), "profile-source-"));
     made.push(dir);
-    await mkdir(path.join(dir, "Default"), { recursive: true });
+    await mkdir(path.join(dir, "Default", "Local Storage", "leveldb"), { recursive: true });
     await writeFile(path.join(dir, "Default", "Cookies"), "stale sqlite bytes");
+    await writeFile(
+      path.join(dir, "Default", "Local Storage", "leveldb", "000003.log"),
+      "stale leveldb bytes"
+    );
     await writeFile(path.join(dir, "Preferences"), "{}");
     await writeFile(path.join(dir, "SingletonLock"), "held");
     return dir;
   }
+
+  const leveldb = path.join("Default", "Local Storage", "leveldb", "000003.log");
+
+  const liveOrigin = {
+    origin: "https://example.test",
+    localStorage: [{ name: "token", value: "fresh-from-the-browser" }]
+  };
 
   const cookie = {
     name: "session",
@@ -179,16 +206,38 @@ describe("borrowProfileForSession", () => {
     const borrowed = await borrowProfileForSession({
       profileDir: source,
       sessionId: "session-b",
-      liveCookies: async () => [cookie]
+      liveState: async () => ({ cookies: [cookie], origins: [liveOrigin] })
     });
     made.push(borrowed.profileDir!);
 
     expect(borrowed.cookies).toEqual([cookie]);
-    // The stale file must not be carried over: the live set is the whole truth.
+    expect(borrowed.origins).toEqual([liveOrigin]);
+    // The stale files must not be carried over: the live state is the whole truth,
+    // and a stale value beating a fresh one is the defect, not a safety net.
     expect(existsSync(path.join(borrowed.profileDir!, "Default", "Cookies"))).toBe(false);
-    // Everything else a copy is for — localStorage, preferences — still comes.
+    expect(existsSync(path.join(borrowed.profileDir!, leveldb))).toBe(false);
+    // Everything else a copy is for still comes.
     expect(existsSync(path.join(borrowed.profileDir!, "Preferences"))).toBe(true);
     expect(existsSync(path.join(borrowed.profileDir!, "SingletonLock"))).toBe(false);
+  });
+
+  it("keeps the local storage files when the live browser reports none", async () => {
+    // The guard that matters: a file is dropped only when there is something to
+    // replace it with. If storageState comes back with no origins — it can, and a
+    // persistent context is not its usual subject — dropping the leveldb as well
+    // would turn a stale login into no login at all.
+    const source = await profileOnDisk();
+    const borrowed = await borrowProfileForSession({
+      profileDir: source,
+      sessionId: "session-b",
+      liveState: async () => ({ cookies: [cookie], origins: [] })
+    });
+    made.push(borrowed.profileDir!);
+
+    expect(borrowed.origins).toEqual([]);
+    expect(existsSync(path.join(borrowed.profileDir!, leveldb))).toBe(true);
+    // The cookies were answered for, so that file still goes.
+    expect(existsSync(path.join(borrowed.profileDir!, "Default", "Cookies"))).toBe(false);
   });
 
   it("writes nothing back into the profile it borrowed from", async () => {
@@ -196,7 +245,7 @@ describe("borrowProfileForSession", () => {
     const borrowed = await borrowProfileForSession({
       profileDir: source,
       sessionId: "session-b",
-      liveCookies: async () => [cookie]
+      liveState: async () => ({ cookies: [cookie], origins: [liveOrigin] })
     });
     made.push(borrowed.profileDir!);
 
@@ -211,12 +260,14 @@ describe("borrowProfileForSession", () => {
     const borrowed = await borrowProfileForSession({
       profileDir: source,
       sessionId: "session-b",
-      liveCookies: async () => null
+      liveState: async () => null
     });
     made.push(borrowed.profileDir!);
 
     expect(borrowed.cookies).toEqual([]);
+    expect(borrowed.origins).toEqual([]);
     expect(existsSync(path.join(borrowed.profileDir!, "Default", "Cookies"))).toBe(true);
+    expect(existsSync(path.join(borrowed.profileDir!, leveldb))).toBe(true);
   });
 
   it("treats a holder that throws as one that cannot answer", async () => {
@@ -224,7 +275,7 @@ describe("borrowProfileForSession", () => {
     const borrowed = await borrowProfileForSession({
       profileDir: source,
       sessionId: "session-b",
-      liveCookies: async () => {
+      liveState: async () => {
         throw new Error("the browser closed while we were asking");
       }
     });
@@ -232,6 +283,7 @@ describe("borrowProfileForSession", () => {
 
     expect(borrowed.cookies).toEqual([]);
     expect(existsSync(path.join(borrowed.profileDir!, "Default", "Cookies"))).toBe(true);
+    expect(existsSync(path.join(borrowed.profileDir!, leveldb))).toBe(true);
   });
 
   it("still hands over the cookies when there is nothing to copy", async () => {
@@ -240,10 +292,11 @@ describe("borrowProfileForSession", () => {
     const borrowed = await borrowProfileForSession({
       profileDir: path.join(tmpdir(), "profile-that-is-not-there"),
       sessionId: "session-b",
-      liveCookies: async () => [cookie]
+      liveState: async () => ({ cookies: [cookie], origins: [liveOrigin] })
     });
 
     expect(borrowed.profileDir).toBeNull();
     expect(borrowed.cookies).toEqual([cookie]);
+    expect(borrowed.origins).toEqual([liveOrigin]);
   });
 });

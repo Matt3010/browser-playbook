@@ -8,6 +8,7 @@ import {
   actionToStep,
   chooseSelector,
   formatSelectorAsCode,
+  isPositionalSelector,
   RecordedActionSchema,
   type ElementInfo,
   type RecordedAction,
@@ -30,6 +31,7 @@ import {
   NAVIGATION_TIMEOUT_MS
 } from "../runner/navigation";
 import { resolveUnique } from "../runner/locator";
+import type { LiveBrowserState, OriginStorage } from "./profile";
 import { deliverPointerAction } from "../runner/pointer-action";
 
 const TOOLTIP_ID = "__recorder_tooltip__";
@@ -49,11 +51,12 @@ export interface SessionOptions {
   /** False for a copy or a throwaway: those are deleted when the session ends. */
   keepProfile?: boolean;
   /**
-   * Cookies to install before the first navigation, for a session that had to
-   * borrow the state of a browser already open on its profile. They come from
-   * that browser rather than from its files; see session/profile.ts.
+   * State to install before the first navigation, for a session that had to borrow
+   * it from a browser already open on its profile. It comes from that browser
+   * rather than from its files; see session/profile.ts.
    */
   seedCookies?: Cookie[];
+  seedOrigins?: OriginStorage[];
   timeoutMs: number;
   /**
    * When set, the session closes itself after this long without being touched by
@@ -82,11 +85,22 @@ interface TrackedPage {
  * resolution the runner will use. Anything else would only verify a second
  * approximation of the runner rather than the runner itself.
  */
-export type StepVerification =
+export type StepVerification = (
   | { status: "ok"; usedFallback: boolean }
   | { status: "ambiguous"; message: string }
   | { status: "not-found"; message: string }
-  | { status: "unchecked"; message: string };
+  | { status: "unchecked"; message: string }
+) & {
+  /**
+   * True when the chosen selector identifies the element by where it sits rather
+   * than by what it is called. Decided by `isPositionalSelector` in
+   * workflow-schema and merely carried here: the browser bundle holds no
+   * workspace package, so a UI that worked it out for itself would be the same
+   * rule in a second implementation — which is how this codebase has already
+   * produced three defects.
+   */
+  positional?: boolean;
+};
 
 /** Kept short so recording stays responsive while the user is working. */
 const VERIFY_TIMEOUT_MS = 1500;
@@ -282,6 +296,43 @@ export class BrowserSession {
       }
     }
 
+    /*
+     * Borrowed local storage, written before the page's own scripts run.
+     *
+     * There is no `addLocalStorage` for a persistent context, so it goes in as an
+     * init script — which has to be synchronous, because an application reads its
+     * token as it boots and awaiting anything here would lose the race it exists
+     * to win. The values are therefore embedded rather than fetched.
+     *
+     * Only what is absent is written. The script runs on every navigation, and a
+     * page that has since changed one of these owns it: re-imposing the borrowed
+     * value would undo the run's own work. Nothing stale competes, because the
+     * files these came from are left out of the copy.
+     *
+     * The one thing it gets wrong: a key the page *deletes* comes back on the next
+     * navigation. Narrow, and the alternative is a marker key of our own left in
+     * the site's storage, which is a footprint on somebody else's page.
+     */
+    const seedOrigins = (this.options.seedOrigins ?? []).filter(
+      (entry) => entry.localStorage.length > 0
+    );
+    if (seedOrigins.length > 0) {
+      await this.context.addInitScript((byOrigin: Record<string, Record<string, string>>) => {
+        try {
+          const items = byOrigin[window.location.origin];
+          if (!items) return;
+          for (const key of Object.keys(items)) {
+            if (window.localStorage.getItem(key) === null) {
+              window.localStorage.setItem(key, items[key]);
+            }
+          }
+        } catch {
+          // A page may deny access to localStorage entirely; a run that then finds
+          // itself signed out fails on a step, which is a legible outcome.
+        }
+      }, localStorageByOrigin(seedOrigins));
+    }
+
     await this.context.exposeBinding("__recorderEmit", (_source, payload) => {
       this.handleEmittedAction(payload as Record<string, unknown>, _source.page);
     });
@@ -366,21 +417,37 @@ export class BrowserSession {
   }
 
   /**
-   * The cookies this browser holds right now, or null when it cannot say.
+   * What this browser holds right now — cookies and local storage — or null when
+   * it cannot say.
    *
    * Asked by a session that wants this one's profile while it is open. It is the
    * browser that is asked, not its directory, because the directory is behind:
-   * Chromium commits the cookie store lazily, and a cookie with no expiry is
-   * never written at all. Reading them changes nothing here.
+   * Chromium commits the cookie store and the leveldb lazily, and a cookie with no
+   * expiry is never written at all. Reading changes nothing here.
+   *
+   * The two halves are collected separately on purpose. `cookies()` is a plain
+   * query and effectively always answers; `storageState()` does more work and is
+   * not usually pointed at a persistent context, so it is allowed to come back with
+   * nothing without taking the cookies down with it.
    */
-  async exportCookies(): Promise<Cookie[] | null> {
+  async exportState(): Promise<LiveBrowserState | null> {
     if (!this.context || this.closing) return null;
+    let cookies: Cookie[];
     try {
-      return await this.context.cookies();
+      cookies = await this.context.cookies();
     } catch (err) {
       this.log.warn({ err }, "Could not read the cookies of this session");
       return null;
     }
+
+    let origins: OriginStorage[] = [];
+    try {
+      const state = await this.context.storageState();
+      origins = state.origins.filter((entry) => entry.localStorage.length > 0);
+    } catch (err) {
+      this.log.warn({ err }, "Could not read the local storage of this session");
+    }
+    return { cookies, origins };
   }
 
   // ---- page tracking ------------------------------------------------------
@@ -538,13 +605,18 @@ export class BrowserSession {
       return;
     }
 
+    // A property of the selector, not of the attempt: reported whatever the
+    // resolution turns out to be, because a positional selector that resolves is
+    // exactly the case nothing used to warn about.
+    const positional = isPositionalSelector(converted.step.selector);
+
     try {
       const { usedFallback } = await resolveUnique(
         page,
         converted.step.selector,
         VERIFY_TIMEOUT_MS
       );
-      this.verifications.set(index, { status: "ok", usedFallback });
+      this.verifications.set(index, { status: "ok", usedFallback, positional });
     } catch (err) {
       const message = (err as Error).message;
       // A click that navigates moves the page out from under the check. That is
@@ -553,13 +625,15 @@ export class BrowserSession {
       if (safeUrl(page) !== urlBefore) {
         this.verifications.set(index, {
           status: "unchecked",
-          message: "The page navigated before the step could be checked"
+          message: "The page navigated before the step could be checked",
+          positional
         });
         return;
       }
       this.verifications.set(index, {
         status: message.includes("matches") ? "ambiguous" : "not-found",
-        message
+        message,
+        positional
       });
     }
   }
@@ -915,6 +989,21 @@ export class BrowserSession {
 function proposeSelector(info: ElementInfo): string {
   const selector = chooseSelector(info);
   return selector ? formatSelectorAsCode(selector) : "no reliable selector";
+}
+
+/**
+ * The borrowed local storage as the init script wants it: one plain object per
+ * origin. Shaped here, in Node, because the script is serialised into the page and
+ * anything it has to work out for itself is code running on somebody else's site.
+ */
+function localStorageByOrigin(origins: OriginStorage[]): Record<string, Record<string, string>> {
+  const byOrigin: Record<string, Record<string, string>> = {};
+  for (const entry of origins) {
+    const items: Record<string, string> = {};
+    for (const item of entry.localStorage) items[item.name] = item.value;
+    byOrigin[entry.origin] = items;
+  }
+  return byOrigin;
 }
 
 function safeUrl(page: Page): string {

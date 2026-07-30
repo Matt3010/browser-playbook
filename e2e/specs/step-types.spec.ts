@@ -828,8 +828,8 @@ test.describe("step execution", () => {
     // disagree: opening the start URL waited 45 s and the recorded `goto` to the
     // same address waited the step's default of 10 s, so a real product page on a
     // real connection was recordable and not replayable. Reproduced with a
-    // response that takes longer than the old budget and less than the real one —
-    // an AliExpress page on a Raspberry Pi is exactly this, minus the determinism.
+    // response that takes longer than the old budget and less than the real one,
+    // which is what any heavy page on a slow connection does, minus the guesswork.
     await configureTestWeb({ navigationDelayMs: 14_000 });
 
     const workflow = await client.createWorkflow(

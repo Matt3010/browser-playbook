@@ -19,11 +19,15 @@ export const NAVIGATION_TIMEOUT_MS = 45_000;
 /**
  * What a `goto` step is actually given.
  *
- * `timeoutMs` on a step answers "how long to look for an element", and the editor
- * has never offered a way to change it, so the 10 000 sitting on every saved step
- * is a default rather than anybody's decision — overriding it takes nothing away.
- * A step that asks for *more* is another matter and is left alone: someone who
- * says a site needs two minutes knows something we do not.
+ * A floor, not a replacement. The session that recorded the page opened it with
+ * the navigation budget, so a replay given less can fail on a page that
+ * demonstrably loads — and record-and-replay disagreeing is the one thing this
+ * product must not do. `timeoutMs` is editable, but it answers "how long to look
+ * for an element", which is a different question with a legitimately smaller
+ * answer; a number chosen for that must not shorten a navigation.
+ *
+ * A step asking for *more* is another matter and is left alone: someone who says a
+ * site needs two minutes knows something we do not.
  */
 export function navigationBudgetMs(stepTimeoutMs: number): number {
   return Math.max(stepTimeoutMs, NAVIGATION_TIMEOUT_MS);

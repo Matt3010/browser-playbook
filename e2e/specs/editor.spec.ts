@@ -499,6 +499,50 @@ test.describe("visual step editor", () => {
     ]);
   });
 
+  test("refuses a timeout the server would refuse, at the field", async ({ page }) => {
+    // The field has always been here and nothing named it — no test id, so no test
+    // reached it — and it carried no bounds at all while the server accepts only
+    // 100…120000. So a 50 typed into it read as accepted and came back as "Invalid
+    // steps" after the click, pointing at nothing.
+    //
+    // What this asserts is *who* refuses, not that something refused. Written the
+    // obvious way first — "the error mentions the timeout" — it passed with the rule
+    // switched off, because the server refuses too and the page shows its `details`.
+    // Both roads end in an error naming the timeout, which is precisely the
+    // distinction the defect is about. So the two things asserted here are the two
+    // the server cannot produce: a message under the field before anything is sent,
+    // and the editor's own wording.
+    await page.getByTestId("step-edit-0").click();
+    await page.getByTestId("step-timeout-input-0").fill("50");
+    await expect(page.getByTestId("step-timeout-error-0")).toContainText("fra 100 e 120000");
+    await page.getByTestId("step-form-close").click();
+
+    await page.getByTestId("save-steps").click();
+    await expect(page.getByTestId("recorder-error")).toContainText(
+      "il timeout deve essere un numero intero fra 100 e 120000 ms"
+    );
+    // Refused where the payload is built, so nothing was ever sent.
+    expect((await client.getWorkflow(workflowId)).steps[0].timeoutMs).not.toBe(50);
+
+    await page.getByTestId("step-edit-0").click();
+    await page.getByTestId("step-timeout-input-0").fill("200000");
+    await expect(page.getByTestId("step-timeout-error-0")).toBeVisible();
+    await page.getByTestId("step-form-close").click();
+    await page.getByTestId("save-steps").click();
+    await expect(page.getByTestId("recorder-error")).toContainText(
+      "il timeout deve essere un numero intero fra 100 e 120000 ms"
+    );
+
+    // And a value inside the range saves, so the rule refuses without blocking: a
+    // check that only ever says no is indistinguishable from a broken form.
+    await page.getByTestId("step-edit-0").click();
+    await page.getByTestId("step-timeout-input-0").fill("30000");
+    await expect(page.getByTestId("step-timeout-error-0")).toBeHidden();
+    await page.getByTestId("step-form-close").click();
+    await save(page);
+    expect((await client.getWorkflow(workflowId)).steps[0].timeoutMs).toBe(30000);
+  });
+
   test("remembering the browser is off until the page turns it on", async ({ page }) => {
     // The default matters more than the switch: a workflow whose own steps sign in
     // must meet the site as a stranger every run, or the second one lands where

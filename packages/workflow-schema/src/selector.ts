@@ -196,6 +196,37 @@ function buildCandidates(info: ElementInfo): Candidate[] {
   );
 }
 
+/**
+ * True when a selector identifies its element by *where it sits* rather than by
+ * what it is called.
+ *
+ * The structural path is the last candidate there is, reached when an element has
+ * no test id, no accessible name, no usable id — a price in a `<span>` on a
+ * product page is the ordinary case. It resolves to exactly one element the
+ * instant it is recorded, so the recorder's own check reports "verificato", and it
+ * breaks the moment the page is rearranged: on the very sites that rearrange
+ * themselves, which is why the element had nothing to be called in the first
+ * place. Nothing used to say so, and a step that counts looked exactly like a
+ * step that names.
+ *
+ * This does not refuse anything and does not repair anything — there is often no
+ * better selector to be had, and guessing one is what this project refuses. It
+ * only lets the recorder say what it knows.
+ *
+ * Being CSS is not the point: `input[name='size'][value='15']` names a control
+ * the way the form names it. Counting is the point, so the question asked is
+ * whether the value walks the document.
+ */
+export function isPositionalSelector(selector: Selector | null | undefined): boolean {
+  if (!selector) return false;
+  if (selector.strategy === "xpath") return true;
+  if (selector.strategy !== "css") return false;
+  const value = selector.value ?? "";
+  // Either it is anchored at the document root — which is what buildCssPath
+  // produces — or it counts siblings anywhere along the way.
+  return /^\s*html\b/i.test(value) || /:nth-(of-type|child|last-child|last-of-type)\b/i.test(value);
+}
+
 /** Builds a raw CSS/XPath string usable as a fallback selector. */
 export function buildFallback(info: ElementInfo): string | null {
   // For a grouped input the value is what disambiguates it.

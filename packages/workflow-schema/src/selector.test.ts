@@ -5,6 +5,7 @@ import {
   formatSelectorAsCode,
   buildFallback,
   isGeneratedId,
+  isPositionalSelector,
   MAX_TEXTUAL_SELECTOR_LENGTH,
   type ElementInfo
 } from "./selector";
@@ -272,6 +273,71 @@ describe("isGeneratedId", () => {
     for (const id of ["user_r_name", "order_ref_2", "repository-name-input", "_private_note"]) {
       expect(isGeneratedId(id), id).toBe(false);
     }
+  });
+});
+
+describe("isPositionalSelector", () => {
+  it("recognises a selector that counts instead of naming", () => {
+    // The structural path is the last candidate there is: it is what the recorder
+    // resolves to when an element has no testid, no accessible name, no usable id.
+    // It works the instant it is recorded and breaks the moment the page is
+    // rearranged — and until now nothing said so, because it resolves to exactly
+    // one element and the check therefore reported "verificato".
+    expect(
+      isPositionalSelector({
+        strategy: "css",
+        value: "html > body > div:nth-of-type(2) > div > div:nth-of-type(1) > span",
+        pageId: "main"
+      })
+    ).toBe(true);
+    expect(
+      isPositionalSelector({
+        strategy: "xpath",
+        value: "/html/body/div[2]/div/span",
+        pageId: "main"
+      })
+    ).toBe(true);
+  });
+
+  it("does not call a selector positional just for being CSS", () => {
+    // A grouped radio is addressed by name and value, which is CSS and is not a
+    // position: it names the control the way the form itself names it.
+    expect(
+      isPositionalSelector({
+        strategy: "css",
+        value: "input[name='size'][value='15']",
+        pageId: "main"
+      })
+    ).toBe(false);
+    expect(isPositionalSelector({ strategy: "css", value: "#checkout", pageId: "main" })).toBe(
+      false
+    );
+  });
+
+  it("calls nothing that names an element positional", () => {
+    for (const selector of [
+      { strategy: "testid" as const, value: "welcome", pageId: "main" },
+      { strategy: "role" as const, role: "button", name: "Login", pageId: "main" },
+      { strategy: "label" as const, value: "Campo testo", pageId: "main" },
+      { strategy: "id" as const, value: "email", pageId: "main" },
+      { strategy: "name" as const, value: "password", pageId: "main" }
+    ]) {
+      expect(isPositionalSelector(selector), selector.strategy).toBe(false);
+    }
+  });
+
+  it("says so for what the recorder actually chooses for an anonymous element", () => {
+    // Not a fixture: the engine is asked. A span with nothing to identify it — the
+    // shape of a price on a real product page — must come back flagged, or the
+    // rule and the recorder have drifted apart.
+    const chosen = chooseSelector({
+      tag: "span",
+      text: "€ 1.749,00",
+      cssPath: "html > body > div:nth-of-type(7) > div > span",
+      unique: { css: true }
+    });
+    expect(chosen).not.toBeNull();
+    expect(isPositionalSelector(chosen!)).toBe(true);
   });
 });
 

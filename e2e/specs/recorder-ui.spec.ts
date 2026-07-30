@@ -163,6 +163,50 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
     await expect(outputs).toContainText("falso");
   });
 
+  test("says when a step found its element by counting rather than by name", async ({ page }) => {
+    // The structural path is the last candidate there is, and it resolves to
+    // exactly one element — so the recorder's own check said "verificato" and
+    // nothing said the step would break the moment the page is rearranged: a step
+    // that counts looked exactly like a step that names, green badge included.
+    //
+    // Nothing here is a fixture: the engine picks the selector for a real element
+    // that has nothing to be called, and the page renders what the engine decided.
+    // If either side stops agreeing, this fails.
+    await loginThroughUi(page);
+
+    const workflow = await client.createWorkflow(
+      `Selettore posizionale ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/elements`
+    );
+    const sessionId = await startSession(page, workflow.id);
+
+    await page.getByTestId("record").click();
+    await expect(page.getByTestId("recording-state")).toContainText("attiva");
+
+    // A named control first: its badge must stay clean, or the warning would mean
+    // nothing by appearing on everything.
+    await client.interact(sessionId, { kind: "fill", selector: "#text-input", value: "ciao" });
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(2, { timeout: 30_000 });
+
+    // Then the anonymous price: no id, no test id, no accessible name, and text a
+    // price makes volatile — every candidate refused but the structural one.
+    await client.interact(sessionId, { kind: "click", selector: "div > div > div > span" });
+    await expect(page.getByTestId("step-list").locator("li")).toHaveCount(3, { timeout: 30_000 });
+
+    await expect(page.getByTestId("step-positional-2")).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByTestId("step-positional-2")).toContainText("posizionale");
+    // Resolving is not the same as being stable, and the two badges say so together.
+    await expect(page.getByTestId("step-verification-2")).toHaveAttribute("data-status", "ok");
+    await expect(page.getByTestId("step-positional-1")).toBeHidden();
+
+    const recorded = await client.getRecording(sessionId);
+    const last = recorded.verifications[recorded.verifications.length - 1];
+    expect(last.positional, "the worker is what decides this, not the page").toBe(true);
+
+    await page.getByTestId("stop-recording").click();
+    await page.getByTestId("close-session").click();
+  });
+
   test("says once that an action was skipped, not once a second", async ({ page }) => {
     // The live log is written by the poll, which runs every second and read the
     // skipped count as news every time: one discarded action produced the same

@@ -2,7 +2,12 @@ import type { Cookie } from "playwright";
 import type { Logger } from "@app/shared";
 import type { WorkerConfig } from "../config";
 import { SlotAllocator, NoSlotAvailableError } from "./allocator";
-import { borrowProfileForSession, profilePathFor, ProfileLocks } from "./profile";
+import {
+  borrowProfileForSession,
+  profilePathFor,
+  ProfileLocks,
+  type OriginStorage
+} from "./profile";
 import { BrowserSession } from "./session";
 import { checkSessionLimits } from "./limits";
 
@@ -118,26 +123,33 @@ export class SessionManager {
      * opened twice. But the normal thing a person does is press "Esegui adesso"
      * with the recording browser still on screen, and refusing that would break
      * the very flow the kept profile exists to serve. So the second one borrows:
-     * the cookies from the browser that holds them — the only thing that knows
-     * them, its files being tens of seconds behind — and the rest from a copy of
-     * the directory, which it writes nothing back into.
+     * the session state from the browser that holds it — the only thing that knows
+     * it, its files being tens of seconds behind — and the rest from a copy of the
+     * directory, which it writes nothing back into.
      */
     let profileDir = profilePathFor(this.config.profileDir, input.userId, input.workflowId);
     let ownsProfile = false;
     let seedCookies: Cookie[] | undefined;
+    let seedOrigins: OriginStorage[] | undefined;
     if (profileDir) {
       const holder = this.profileLocks.holderOf(profileDir);
       if (holder && holder !== input.sessionId) {
         const borrowed = await borrowProfileForSession({
           profileDir,
           sessionId: input.sessionId,
-          liveCookies: async () => (await this.sessions.get(holder)?.exportCookies()) ?? null,
+          liveState: async () => (await this.sessions.get(holder)?.exportState()) ?? null,
           onProblem: (err, what) => this.log.warn({ err, holder }, what)
         });
         profileDir = borrowed.profileDir;
         seedCookies = borrowed.cookies;
+        seedOrigins = borrowed.origins;
         this.log.info(
-          { holder, profileDir, cookies: borrowed.cookies.length },
+          {
+            holder,
+            profileDir,
+            cookies: borrowed.cookies.length,
+            origins: borrowed.origins.length
+          },
           "The workflow's browser is already open; this session borrows its state"
         );
       } else {
@@ -155,6 +167,7 @@ export class SessionManager {
       // of a session that belongs to no workflow.
       keepProfile: ownsProfile,
       seedCookies,
+      seedOrigins,
       timeoutMs: input.timeoutMs ?? this.config.sessionTimeoutMs,
       idleTimeoutMs:
         input.idleTimeoutMs === undefined ? this.config.sessionIdleTimeoutMs : input.idleTimeoutMs,

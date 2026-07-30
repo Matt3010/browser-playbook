@@ -34,10 +34,13 @@ describe("navigationBudgetMs", () => {
     expect(navigationBudgetMs(90_000)).toBe(90_000);
   });
 
-  it("lifts a stored step without it having to be recorded again", () => {
-    // Every workflow already saved carries 10 000, because the editor never
-    // offered the field: a fix that only changed the default would leave them all
-    // broken and there would be nothing the user could do about it.
+  it("lifts a step below the budget, whatever the step says", () => {
+    // The field is editable, but a number chosen for "how long to look for an
+    // element" — where a small answer is legitimate — must not shorten a
+    // navigation: the session that recorded the page opened it with the full
+    // budget, and a replay given less fails on a page that demonstrably loads.
+    // It also lifts every workflow already saved, which all carry the 10 000
+    // default, without any of them having to be recorded again.
     expect(navigationBudgetMs(100)).toBe(NAVIGATION_TIMEOUT_MS);
   });
 });

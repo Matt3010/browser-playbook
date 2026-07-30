@@ -208,6 +208,12 @@ export interface StepVerification {
   status: StepVerificationStatus;
   message?: string;
   usedFallback?: boolean;
+  /**
+   * The selector identifies the element by where it sits, not by what it is
+   * called. Decided by the recorder, never worked out here: the same rule in two
+   * implementations is how this project has already produced three defects.
+   */
+  positional?: boolean;
 }
 
 export interface RecordingResult {

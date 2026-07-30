@@ -318,6 +318,10 @@ export async function runExecution(
       try {
         await executeStep(step, ctx);
       } catch (err) {
+        // Asked here, before the screenshot and the artifacts: whether this failure
+        // is ours or the cancellation's is a question about *when*, and after the
+        // cleanup it can no longer be answered.
+        const decidedBeforeCancel = !(await wasCancelled(prisma, input.executionId));
         let message = safe((err as Error).message);
         /*
          * A remembered browser has one failure mode worth naming out loud, and it
@@ -351,6 +355,7 @@ export async function runExecution(
           workflowName: workflow.name,
           step,
           message,
+          decidedBeforeCancel,
           executionDir,
           writeLog,
           log
@@ -409,7 +414,10 @@ export async function runExecution(
     if (input.scheduleId) await settleSchedule(prisma, input.scheduleId, "completed");
     return { status: "completed" };
   } catch (err) {
-    // Failures outside a step (for example the browser session itself).
+    // Failures outside a step (for example the browser session itself). Same
+    // question as inside a step, asked before anything else runs: was this failure
+    // ours, or the cancellation's?
+    const decidedBeforeCancel = !(await wasCancelled(prisma, input.executionId));
     const message = safe((err as Error).message);
     log.error({ err }, "Execution failed outside step execution");
     await prisma.executionLog.create({
@@ -419,7 +427,10 @@ export async function runExecution(
         message: `Execution aborted: ${message}`
       }
     });
-    await finish(prisma, input.executionId, "failed", { errorMessage: message });
+    await finish(prisma, input.executionId, "failed", {
+      errorMessage: message,
+      decidedBeforeCancel
+    });
     await notifyFailure(notifications, input.userId, workflow.name, message, log);
     if (input.scheduleId) await settleSchedule(prisma, input.scheduleId, "failed");
     return { status: "failed", errorMessage: message };
@@ -453,13 +464,72 @@ async function wasCancelled(prisma: PrismaClient, executionId: string): Promise<
   return current?.status === "cancelled";
 }
 
+/**
+ * What to write when the run has an outcome and the row may have been cancelled
+ * while that outcome was being recorded.
+ *
+ * Three cases, and the middle one is the defect this exists to close.
+ *
+ *  - **Not cancelled** — write the outcome, which is the ordinary path.
+ *  - **Cancelled, and it was already cancelled when the outcome was decided** —
+ *    write nothing. The cancellation is what closed the browser and therefore what
+ *    made the step fail: reporting "Target page, context or browser has been
+ *    closed" would bury the fact that the user asked for it.
+ *  - **Cancelled, but not yet when the outcome was decided** — keep the status,
+ *    keep the reason. The run had already stopped on its own; the cancel arrived
+ *    while the failure was being photographed and could not stop anything. Saying
+ *    only "Cancelled by the user" tells the operator they stopped something that
+ *    had stopped by itself, and hides why.
+ *
+ * The status is never rewritten: the user did press it, and a terminal state must
+ * not move underneath them. Only the reason is rescued.
+ */
+export function outcomeWrite(input: {
+  cancelledNow: boolean;
+  /** False when the row was already cancelled at the moment the outcome was decided. */
+  decidedBeforeCancel: boolean;
+}): "full" | "reason-only" | "nothing" {
+  if (!input.cancelledNow) return "full";
+  return input.decidedBeforeCancel ? "reason-only" : "nothing";
+}
+
 async function finish(
   prisma: PrismaClient,
   executionId: string,
   status: Extract<ExecutionStatus, "completed" | "failed">,
-  extra: { errorMessage?: string; failedStepId?: string; currentUrl?: string | null }
-): Promise<void> {
-  if (await wasCancelled(prisma, executionId)) return;
+  extra: {
+    errorMessage?: string;
+    failedStepId?: string;
+    currentUrl?: string | null;
+    /**
+     * True when this outcome was decided before any cancellation landed. Asked at
+     * the moment the step threw rather than here: by the time the row is written
+     * the cleanup has run, and asking now cannot tell a run the user stopped from
+     * one that had already stopped.
+     */
+    decidedBeforeCancel?: boolean;
+  }
+): Promise<"full" | "reason-only" | "nothing"> {
+  const write = outcomeWrite({
+    cancelledNow: await wasCancelled(prisma, executionId),
+    decidedBeforeCancel: extra.decidedBeforeCancel ?? false
+  });
+  if (write === "nothing") return write;
+
+  if (write === "reason-only") {
+    if (!extra.errorMessage) return "nothing";
+    await prisma.execution.update({
+      where: { id: executionId },
+      data: {
+        errorMessage:
+          `${extra.errorMessage} (the run had already stopped here when the ` +
+          `cancellation arrived)`,
+        failedStepId: extra.failedStepId ?? null
+      }
+    });
+    return write;
+  }
+
   await prisma.execution.update({
     where: { id: executionId },
     data: {
@@ -470,6 +540,7 @@ async function finish(
       ...(extra.currentUrl !== undefined ? { currentUrl: extra.currentUrl } : {})
     }
   });
+  return write;
 }
 
 /**
@@ -520,6 +591,8 @@ interface FailureInput {
   workflowName: string;
   step: Step;
   message: string;
+  /** False when the run was already cancelled at the moment this step threw. */
+  decidedBeforeCancel: boolean;
   executionDir: string;
   writeLog: (
     level: "info" | "warn" | "error",
@@ -586,21 +659,25 @@ async function handleFailure(input: FailureInput): Promise<void> {
     screenshotPath = null;
   }
 
-  if (await wasCancelled(prisma, executionId)) {
-    input.log.info("Execution was cancelled while this step was running");
+  // Through `finish` rather than writing the row here: this used to be a second
+  // copy of the same decision, which is how the reason came to be lost in the one
+  // case the copy did not cover.
+  const written = await finish(prisma, executionId, "failed", {
+    errorMessage: input.message,
+    failedStepId: step.id,
+    currentUrl,
+    decidedBeforeCancel: input.decidedBeforeCancel
+  });
+
+  if (written !== "full") {
+    // The user is standing at the screen — they just pressed Annulla — so there is
+    // nobody to notify who does not already know.
+    input.log.info(
+      { written },
+      "Execution was cancelled around this step; the row keeps the cancellation"
+    );
     return;
   }
-
-  await prisma.execution.update({
-    where: { id: executionId },
-    data: {
-      status: "failed",
-      finishedAt: new Date(),
-      errorMessage: input.message,
-      failedStepId: step.id,
-      currentUrl
-    }
-  });
 
   await notifyFailure(
     input.notifications,

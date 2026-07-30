@@ -235,6 +235,65 @@ test.describe("browser session isolation", () => {
     }
   });
 
+  test("inherits a login the site keeps in localStorage, from a browser still open", async () => {
+    // Cookies are not the only place a session lives: a single-page application
+    // keeps its token in localStorage and no cookie is involved at all. The leveldb
+    // holding it is written as lazily as the cookie store, so a borrowing session
+    // that took the files arrived as a stranger — the same defect as the cookies,
+    // in the place the cookie fix could not reach.
+    const client = new AppClient();
+    await client.login();
+
+    const workflow = await client.createWorkflow(
+      `Sessione in localStorage ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/spa/login`
+    );
+    await client.rememberBrowser(workflow.id);
+    // The run asks only for the protected area. Without the token the page's own
+    // script sends it back to the sign-in screen and the assertion finds nothing.
+    await client.putSteps(workflow.id, [
+      step({
+        type: "goto",
+        name: "Vai all'area riservata",
+        value: `${TEST_WEB_INTERNAL_URL}/spa/area`
+      }),
+      step({
+        type: "assertVisible",
+        name: "Verifica il bentornato",
+        selector: {
+          strategy: "testid",
+          value: "spa-welcome",
+          fallback: null,
+          pageId: "main",
+          frame: null
+        }
+      })
+    ]);
+
+    const session = await client.createSession(
+      `${TEST_WEB_INTERNAL_URL}/spa/login`,
+      undefined,
+      workflow.id
+    );
+    try {
+      await client.interact(session.sessionId, { kind: "click", selector: "#spa-signin" });
+      await expect
+        .poll(async () => (await client.getSession(session.sessionId)).currentUrl, {
+          timeout: 45_000
+        })
+        .toContain("/spa/area");
+
+      // Deliberately left open, so the run has to borrow rather than read the files.
+      const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+      expect(
+        execution.status,
+        `the run must inherit the localStorage token: ${execution.errorMessage ?? ""}`
+      ).toBe("completed");
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
   test("says why a step found nothing when the browser is remembered", async () => {
     // A workflow recorded from after the login starts with a goto — which succeeds,
     // because the page exists either way — and falls over on the step after it. The
