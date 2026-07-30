@@ -823,6 +823,43 @@ test.describe("step execution", () => {
     expect(messages).not.toContain("Step disabilitato");
   });
 
+  test("gives a goto the navigation budget, not the element-finding one", async () => {
+    // A page a session can open must be a page a run can open. The two used to
+    // disagree: opening the start URL waited 45 s and the recorded `goto` to the
+    // same address waited the step's default of 10 s, so a real product page on a
+    // real connection was recordable and not replayable. Reproduced with a
+    // response that takes longer than the old budget and less than the real one —
+    // an AliExpress page on a Raspberry Pi is exactly this, minus the determinism.
+    await configureTestWeb({ navigationDelayMs: 14_000 });
+
+    const workflow = await client.createWorkflow(
+      `Navigazione lenta ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/slow-link`
+    );
+
+    await client.putSteps(workflow.id, [
+      step({
+        type: "goto",
+        name: "Vai alla destinazione lenta",
+        // What every already-saved workflow carries, because the editor has never
+        // offered the field: the fix has to lift these without a re-recording.
+        timeoutMs: 10_000,
+        value: `${TEST_WEB_INTERNAL_URL}/slow-target`
+      }),
+      step({
+        type: "assertVisible",
+        name: "Verifica l'arrivo",
+        selector: sel("testid", "slow-arrived")
+      })
+    ]);
+
+    const execution = await client.waitForExecution((await client.runNow(workflow.id)).id);
+    expect(
+      execution.status,
+      `a page that takes 14 s must still be reachable: ${execution.errorMessage ?? ""}`
+    ).toBe("completed");
+  });
+
   test("refuses to upload a file from outside the fixture directory", async () => {
     const workflow = await client.createWorkflow(
       `Upload non permesso ${Date.now()}`,

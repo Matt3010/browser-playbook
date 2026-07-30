@@ -470,6 +470,30 @@ These are the classes of defect this codebase actually produced, so look here fi
   keep the promise of "remember the browser" on such sites, at the price of
   telling the site something untrue about its own session. Not a gap to close:
   a decision, and the site's to make.
+- **One kind of waiting priced as another.** Opening a session's start URL waited
+  45 s; the recorded `goto` to the very same address waited `step.timeoutMs`,
+  whose default is 10 s. The same function, the same page, and the tighter budget
+  on the side that matters — so a real product page on a real connection could be
+  recorded and could not be replayed, which is the contradiction this project
+  refuses. Found on a live AliExpress workflow that died with
+  `page.goto: Timeout 10000ms exceeded`. `timeoutMs` answers "how long to look for
+  an element"; waiting for a document to arrive is a different question and now has
+  its own name, `NAVIGATION_TIMEOUT_MS`, used by every navigation there is. It is a
+  floor rather than a replacement (`navigationBudgetMs`): a step asking for *more*
+  knows something we do not. A floor was necessary, not merely tidy — the editor
+  has never exposed `timeoutMs`, so every workflow already saved carries 10 000 and
+  changing the default alone would have left them all broken with no user-side
+  repair. Reproduced against `/slow-target` at 14 s, between the old budget and
+  the real one.
+  Its sibling, seen in the same incident and *not* fixed: the step failed at
+  09:59:16 and the user cancelled at 09:59:23, while the runner was still
+  photographing the failure — so `finish` found the row already `cancelled`,
+  declined to overwrite it (deliberately: a cancellation must survive a later
+  failure) and the row now reads "Cancelled by the user", hiding the timeout that
+  had already decided the outcome. The order is knowable — ask `wasCancelled`
+  when the step throws rather than after the cleanup — but the fix has to answer
+  whether a terminal `cancelled` may become `failed`, which is a state-machine
+  question and not a one-liner.
 
 ### Things a test cannot pin down
 

@@ -5,6 +5,31 @@ import { assertSafeTargetUrl, type UrlSafetyOptions } from "@app/shared";
 const NEUTRAL_URLS = new Set(["", "about:blank", "about:srcdoc", "chrome://newtab/"]);
 
 /**
+ * How long any navigation in this product is given to bring back a document.
+ *
+ * One number, in one place, because it used to be two. Opening a session's start
+ * URL waited 45 s and the recorded `goto` to the same address waited the default
+ * step timeout of 10 s — the same function, the same page, and the tighter budget
+ * on the side that matters. A real product page on a real connection takes longer
+ * than ten seconds, so a site could be recorded and could not be replayed, which
+ * this project treats as a contradiction rather than a limitation.
+ */
+export const NAVIGATION_TIMEOUT_MS = 45_000;
+
+/**
+ * What a `goto` step is actually given.
+ *
+ * `timeoutMs` on a step answers "how long to look for an element", and the editor
+ * has never offered a way to change it, so the 10 000 sitting on every saved step
+ * is a default rather than anybody's decision — overriding it takes nothing away.
+ * A step that asks for *more* is another matter and is left alone: someone who
+ * says a site needs two minutes knows something we do not.
+ */
+export function navigationBudgetMs(stepTimeoutMs: number): number {
+  return Math.max(stepTimeoutMs, NAVIGATION_TIMEOUT_MS);
+}
+
+/**
  * Re-checks where a navigation actually ended up.
  *
  * Validating only the requested URL is not enough: a page is free to redirect the

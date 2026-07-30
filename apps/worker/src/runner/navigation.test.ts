@@ -3,7 +3,9 @@ import type { Page } from "playwright";
 import {
   assertSafeLandedUrl,
   gotoTolerantOfRedirects,
-  isSupersededNavigation
+  isSupersededNavigation,
+  navigationBudgetMs,
+  NAVIGATION_TIMEOUT_MS
 } from "./navigation";
 
 function fakePage(overrides: Partial<Page> = {}): Page {
@@ -14,6 +16,31 @@ function fakePage(overrides: Partial<Page> = {}): Page {
     ...overrides
   } as unknown as Page;
 }
+
+describe("navigationBudgetMs", () => {
+  it("gives a recorded goto the same budget as the session that recorded it", () => {
+    // The defect this exists to stop: opening the start URL got 45 s, and the
+    // recorded `goto` to the very same address got the default step timeout of
+    // 10 s. Same function, same URL, two budgets — so a heavy site could be
+    // recorded and could not be replayed, which is the one thing that must never
+    // be true. Waiting for a document to arrive is not the same kind of wait as
+    // finding an element on it, and it does not belong to the same number.
+    expect(navigationBudgetMs(10_000)).toBe(NAVIGATION_TIMEOUT_MS);
+    expect(NAVIGATION_TIMEOUT_MS).toBeGreaterThan(10_000);
+  });
+
+  it("keeps a longer budget a step asked for", () => {
+    // A step configured for a site slower still must not be cut down to the floor.
+    expect(navigationBudgetMs(90_000)).toBe(90_000);
+  });
+
+  it("lifts a stored step without it having to be recorded again", () => {
+    // Every workflow already saved carries 10 000, because the editor never
+    // offered the field: a fix that only changed the default would leave them all
+    // broken and there would be nothing the user could do about it.
+    expect(navigationBudgetMs(100)).toBe(NAVIGATION_TIMEOUT_MS);
+  });
+});
 
 describe("isSupersededNavigation", () => {
   it("recognises a navigation replaced by the page itself", () => {

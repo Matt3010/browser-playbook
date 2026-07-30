@@ -8,7 +8,7 @@ import {
   type Step
 } from "@app/workflow-schema";
 import { resolveUnique } from "./locator";
-import { assertSafeLandedUrl, gotoTolerantOfRedirects } from "./navigation";
+import { assertSafeLandedUrl, gotoTolerantOfRedirects, navigationBudgetMs } from "./navigation";
 import { safeDownloadPath } from "./artifact-path";
 import { deliverPointerAction } from "./pointer-action";
 import type { BrowserSession } from "../session/session";
@@ -169,7 +169,8 @@ export async function executeStep(step: Step, ctx: StepExecutionContext): Promis
         allowedHosts: ctx.urlSafety.allowedHosts
       });
       const page = pageFor(step, ctx);
-      await gotoTolerantOfRedirects(page, url, step.timeoutMs, (message) =>
+      // The navigation budget, not the element-finding one: see navigation.ts.
+      await gotoTolerantOfRedirects(page, url, navigationBudgetMs(step.timeoutMs), (message) =>
         ctx.log("warn", `'${step.name}': ${message}`)
       );
       // The page may have redirected the browser somewhere else entirely.

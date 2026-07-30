@@ -24,7 +24,11 @@ import {
 import type { SessionSlot } from "./allocator";
 import { recorderBrowserScript } from "../recorder/browser-script";
 import { buildHighlightCss, DEFAULT_RECORDER_COLORS } from "../recorder/highlight-css";
-import { assertSafeLandedUrl, gotoTolerantOfRedirects } from "../runner/navigation";
+import {
+  assertSafeLandedUrl,
+  gotoTolerantOfRedirects,
+  NAVIGATION_TIMEOUT_MS
+} from "../runner/navigation";
 import { resolveUnique } from "../runner/locator";
 import { deliverPointerAction } from "../runner/pointer-action";
 
@@ -311,7 +315,7 @@ export class BrowserSession {
     this.registerPage(initial, "main");
 
     // A site that redirects itself on load must not prevent the session from starting.
-    await gotoTolerantOfRedirects(initial, this.startUrl, 45_000, (message) =>
+    await gotoTolerantOfRedirects(initial, this.startUrl, NAVIGATION_TIMEOUT_MS, (message) =>
       this.log.warn(message)
     );
     assertSafeLandedUrl(safeUrl(initial), this.options.urlSafety, this.startUrl);
@@ -754,7 +758,9 @@ export class BrowserSession {
   async navigate(url: string): Promise<void> {
     const page = this.getActivePage();
     if (!page) throw new Error("Session has no open page");
-    await gotoTolerantOfRedirects(page, url, 45_000, (message) => this.log.warn(message));
+    await gotoTolerantOfRedirects(page, url, NAVIGATION_TIMEOUT_MS, (message) =>
+      this.log.warn(message)
+    );
     assertSafeLandedUrl(safeUrl(page), this.options.urlSafety, url);
     await this.applyConfigToPage(page);
   }
