@@ -10,6 +10,7 @@ import {
 } from "@app/shared";
 import { requireAuth, currentUser, ownerOfCookie, SESSION_COOKIE } from "../auth";
 import { WorkerHttpError, type WorkerSessionInfo } from "../worker-client";
+import { loadOwnedWorkflow } from "../ownership";
 
 /** Shortest session lifetime a client may ask for. */
 const MIN_SESSION_TIMEOUT_MS = 10_000;
@@ -83,6 +84,19 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
         return reply.code(400).send({ error: (err as Error).message });
       }
 
+      // A session may ask for a workflow's own browser, which is kept between
+      // runs. Ownership is checked here: the profile path is built from the
+      // caller's id, so nothing of another user's could be opened anyway, but a
+      // session claiming a workflow that is not yours is a mistake worth naming.
+      let profileWorkflowId: string | undefined;
+      if (parsed.data.workflowId) {
+        const workflow = await loadOwnedWorkflow(app, userId, parsed.data.workflowId);
+        // Only a workflow that asked to remember gets its own kept browser. The
+        // recording is where the login or the bot check is passed by hand, so it
+        // has to write into the same profile the runs will read.
+        if (workflow.rememberBrowser) profileWorkflowId = workflow.id;
+      }
+
       const sessionId = randomUUID();
       const timeoutMs = Math.min(
         parsed.data.timeoutMs ?? app.config.browserSessionTimeoutMs,
@@ -93,6 +107,7 @@ export async function sessionRoutes(app: FastifyInstance): Promise<void> {
           sessionId,
           userId,
           startUrl: parsed.data.startUrl,
+          workflowId: profileWorkflowId,
           timeoutMs
         });
         const token = signSessionToken(

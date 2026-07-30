@@ -32,6 +32,15 @@ const ConfigSchema = z.object({
   screenHeight: z.coerce.number().int().default(800),
   artifactDir: z.string().default("/data/artifacts"),
   /**
+   * Where a workflow's browser profile lives between runs. A run used to start
+   * from a browser that had never been anywhere, so a site asking for a login
+   * asked every night and one that challenges an unknown visitor challenged
+   * every night. Sessions with no workflow still get a throwaway profile.
+   */
+  profileDir: z.string().default("/data/profiles"),
+  /** A workflow profile untouched for this long is removed. 0 disables it. */
+  profileRetentionDays: z.coerce.number().int().min(0).default(60),
+  /**
    * Execution logs, notifications and artifact files older than this are pruned.
    * Nothing removed them before, so they grew without a ceiling on a device whose
    * storage is an SD card. 0 disables pruning.
@@ -65,6 +74,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): WorkerConfig {
     screenWidth: env.SCREEN_WIDTH,
     screenHeight: env.SCREEN_HEIGHT,
     artifactDir: env.ARTIFACT_DIR,
+    profileDir: env.PROFILE_DIR,
+    profileRetentionDays: env.PROFILE_RETENTION_DAYS,
     historyRetentionDays: env.HISTORY_RETENTION_DAYS,
     uploadFixtureDir: env.UPLOAD_FIXTURE_DIR,
     allowPrivateTargets: env.ALLOW_PRIVATE_TARGETS === "true",

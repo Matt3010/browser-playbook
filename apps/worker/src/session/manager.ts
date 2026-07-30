@@ -1,6 +1,8 @@
+import type { Cookie } from "playwright";
 import type { Logger } from "@app/shared";
 import type { WorkerConfig } from "../config";
 import { SlotAllocator, NoSlotAvailableError } from "./allocator";
+import { borrowProfileForSession, profilePathFor, ProfileLocks } from "./profile";
 import { BrowserSession } from "./session";
 import { checkSessionLimits } from "./limits";
 
@@ -22,6 +24,8 @@ const REAP_INTERVAL_MS = 15_000;
 export class SessionManager {
   private readonly sessions = new Map<string, BrowserSession>();
   private readonly allocator: SlotAllocator;
+  /** Which workflow profiles are open right now; see session/profile.ts. */
+  private readonly profileLocks = new ProfileLocks();
   private reaper: NodeJS.Timeout | null = null;
 
   constructor(
@@ -78,6 +82,12 @@ export class SessionManager {
     sessionId: string;
     userId: string;
     startUrl: string;
+    /**
+     * Whose browser to open. A session that names its workflow gets that
+     * workflow's kept profile, with whatever the last session left in it; one
+     * that names none gets a throwaway, as every session used to.
+     */
+    workflowId?: string | null;
     timeoutMs?: number;
     /** Omit for sessions driven by a running execution: those must not be reaped. */
     idleTimeoutMs?: number | null;
@@ -101,10 +111,50 @@ export class SessionManager {
       throw err;
     }
 
+    /*
+     * Which browser this session opens.
+     *
+     * Chromium keeps a claim inside a profile, so the same directory must not be
+     * opened twice. But the normal thing a person does is press "Esegui adesso"
+     * with the recording browser still on screen, and refusing that would break
+     * the very flow the kept profile exists to serve. So the second one borrows:
+     * the cookies from the browser that holds them — the only thing that knows
+     * them, its files being tens of seconds behind — and the rest from a copy of
+     * the directory, which it writes nothing back into.
+     */
+    let profileDir = profilePathFor(this.config.profileDir, input.userId, input.workflowId);
+    let ownsProfile = false;
+    let seedCookies: Cookie[] | undefined;
+    if (profileDir) {
+      const holder = this.profileLocks.holderOf(profileDir);
+      if (holder && holder !== input.sessionId) {
+        const borrowed = await borrowProfileForSession({
+          profileDir,
+          sessionId: input.sessionId,
+          liveCookies: async () => (await this.sessions.get(holder)?.exportCookies()) ?? null,
+          onProblem: (err, what) => this.log.warn({ err, holder }, what)
+        });
+        profileDir = borrowed.profileDir;
+        seedCookies = borrowed.cookies;
+        this.log.info(
+          { holder, profileDir, cookies: borrowed.cookies.length },
+          "The workflow's browser is already open; this session borrows its state"
+        );
+      } else {
+        this.profileLocks.acquire(profileDir, input.sessionId);
+        ownsProfile = true;
+      }
+    }
+
     const session = new BrowserSession({
       sessionId: input.sessionId,
       userId: input.userId,
       startUrl: input.startUrl,
+      profileDir,
+      // A copy is a throwaway: it is deleted with the session, like the profile
+      // of a session that belongs to no workflow.
+      keepProfile: ownsProfile,
+      seedCookies,
       timeoutMs: input.timeoutMs ?? this.config.sessionTimeoutMs,
       idleTimeoutMs:
         input.idleTimeoutMs === undefined ? this.config.sessionIdleTimeoutMs : input.idleTimeoutMs,
@@ -119,6 +169,7 @@ export class SessionManager {
       onClosed: (sessionId) => {
         this.sessions.delete(sessionId);
         this.allocator.release(slot);
+        if (profileDir && ownsProfile) this.profileLocks.release(profileDir, sessionId);
       }
     });
 
@@ -128,6 +179,7 @@ export class SessionManager {
     } catch (err) {
       this.sessions.delete(input.sessionId);
       this.allocator.release(slot);
+      if (profileDir && ownsProfile) this.profileLocks.release(profileDir, input.sessionId);
       throw err;
     }
     return session;

@@ -948,6 +948,48 @@ test.describe("verifying a recording as it happens", () => {
     }
   });
 
+  test("names an image by its alt, and a picture inside a link by the link", async () => {
+    // Two reasons a page of pictures fell back to a structural path — the worst
+    // selector there is, on exactly the pages that rearrange themselves between
+    // visits. An image carries its name in `alt`, which nothing here read; and a
+    // click on a picture inside a link means the link, which is what has a name.
+    const session = await client.createSession(`${TEST_WEB_INTERNAL_URL}/media`);
+    const clicks = async () =>
+      (await client.getRecording(session.sessionId)).steps.filter((s) => s.type === "click");
+
+    try {
+      await client.setRecording(session.sessionId, true);
+
+      await client.interact(session.sessionId, { kind: "click", selector: "#chart" });
+      await expect.poll(async () => (await clicks()).length, { timeout: 20_000 }).toBe(1);
+
+      const image = (await clicks())[0];
+      expect(image.selector).toMatchObject({
+        strategy: "role",
+        role: "img",
+        name: "Grafico delle vendite"
+      });
+
+      await client.interact(session.sessionId, { kind: "click", selector: "#tile img" });
+      await expect.poll(async () => (await clicks()).length, { timeout: 20_000 }).toBe(2);
+
+      const inLink = (await clicks())[1];
+      expect(
+        inLink.selector,
+        "the link is what a person means by clicking the picture in it"
+      ).toMatchObject({ strategy: "role", role: "link", name: "Apri il grafico" });
+
+      // A decorative image says so with an empty alt: it has no name, and naming
+      // it "img" would be a lie the accessibility tree does not tell either.
+      await client.interact(session.sessionId, { kind: "click", selector: "#decorative" });
+      await expect.poll(async () => (await clicks()).length, { timeout: 20_000 }).toBe(3);
+      const decorative = (await clicks())[2];
+      expect((decorative.selector as { strategy: string }).strategy).not.toBe("role");
+    } finally {
+      await client.closeSession(session.sessionId).catch(() => undefined);
+    }
+  });
+
   test("a structural path names one element in the whole document, not a shape", async () => {
     // An element with nothing to name it by — no id, no accessible name, no
     // stable attribute — leaves only a structural path. The path used to be

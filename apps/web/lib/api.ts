@@ -83,6 +83,12 @@ export interface Workflow {
   name: string;
   startUrl: string;
   status: "draft" | "ready" | "disabled";
+  /**
+   * Whether runs of this workflow share one browser, keeping cookies and local
+   * storage between them. Off by default: a workflow whose steps are the login
+   * must meet the site as a stranger every time.
+   */
+  rememberBrowser?: boolean;
   createdAt: string;
   updatedAt: string;
   stepCount?: number;

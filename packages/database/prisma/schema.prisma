@@ -37,6 +37,13 @@ model Workflow {
   name      String
   startUrl  String
   status    WorkflowStatus @default(draft)
+  /// Whether runs of this workflow share one browser profile, keeping cookies and
+  /// local storage between them. Off by default, and the default is the point: a
+  /// workflow whose steps *are* the login must find its login form every time, and
+  /// a remembered browser would hand the second run a site that already knows it.
+  /// Turned on for the opposite case — a site that challenges an unknown visitor,
+  /// where the check passed once while recording is what makes the run possible.
+  rememberBrowser Boolean   @default(false)
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
 

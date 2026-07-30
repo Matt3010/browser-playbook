@@ -404,6 +404,72 @@ These are the classes of defect this codebase actually produced, so look here fi
   `true`. `raw` is always kept, because the interpretation can be wrong and the
   text on the page cannot. What the masking touches, the interpretation loses with
   it: masking the text and leaving `1234` beside it would give the secret away.
+- **A path that stops partway is a shape, not a place.** The structural fallback
+  selector walked up to `body` and then dropped the anchor, so
+  `div:nth-of-type(7) > div > img` meant "a seventh div, a div, an image"
+  *anywhere* in the document. A cookie banner appearing a second later carried the
+  same shape, the click resolved to two elements, and the run stopped on an
+  ambiguity the page never had — with two plausible matches it could have acted on
+  the wrong one instead. It goes to `html` now, and the eight-segment cap is gone
+  with it, because a truncated path is relative in the middle of the page too.
+  Reproduced with a fixture whose banner repeats the shape of the product.
+- **The reason was in the answer, and the client threw it away.** The API replies
+  `{ error, details }` and the page rendered `error` alone, so "two enabled steps
+  read into 'prezzo'" reached the user as "Invalid steps". One line in the error
+  handler fixed every refusal there is, not the one that was reported. The other
+  half of the same defect: a rule the server enforces has to be enforced where the
+  payload is built — a result name with spaces, or two reads under one name, were
+  accepted by the form and left to Save to reject.
+- **A field the eye can only name by where it sits.** The recorder never read
+  `alt`, and an `<img>` has no text, so a page made of pictures fell back to a
+  structural path on exactly the sites that rearrange themselves. `alt` is the
+  accessible name of an image and contributes to the name of the link around it;
+  and a click landing on a picture inside a link *means the link*, which has a
+  name. Promotion goes up at most three levels, only through elements that cannot
+  be clicked for their own sake, and only if the ancestor has a name — and the
+  tooltip uses the same function, or the panel would promise one selector while
+  the step stored another.
+- **A run that starts from a browser that has never been anywhere.** The profile
+  was a fresh temporary directory per session, so a site asking for a login asked
+  every night and one challenging an unknown visitor challenged every night. A
+  workflow can now keep one browser (`rememberBrowser`, **off by default**), and
+  the default is the point: a workflow whose own steps sign in must meet the site
+  as a stranger, or the second run lands past the login page with nothing to fill.
+  Three things the feature forced: the second session on one profile takes a
+  **copy** (recording and then pressing "Esegui adesso" is the normal flow, not an
+  error, and Chromium will not open a profile twice); profiles are pruned, an
+  orphaned one always; and with remembering on, a first step that finds nothing
+  says the site may already consider the run signed in — a hint in the message,
+  never a decision to skip a login.
+- **News reported as state.** The recorder page polls every second, and the count
+  of discarded actions does not go down, so `skipped > 0` printed the same line
+  once a second for as long as the session lived. Anything a poll reports has to be
+  compared with what was already said.
+- **Asking the disk what only the live process knows.** A session that wants a
+  profile another browser has open takes a copy — recording and then pressing
+  "Esegui adesso" is the normal flow, not an error. But Chromium commits its
+  cookie store lazily, tens of seconds after the login, and a cookie with no
+  expiry is never written at all: the copy taken moments after recording was of a
+  profile that had never signed in, so the run met the site as a stranger and
+  stopped on the first step of the post-login page. Not a rare race — the ordinary
+  case, and the e2e reproduces it every time. The cookies now come from the
+  browser holding them, which is the only thing that knows them
+  (`context.cookies()` on the holder, `addCookies` before the first navigation);
+  the files still supply everything else, localStorage and preferences included.
+  The cookie store is then deliberately *excluded* from the copy, because what is
+  on disk is not merely behind: it can hold a cookie the live browser has since
+  deleted, which the copy would bring back. Both halves may fail and neither is
+  fatal — a holder that cannot answer leaves the disk as the only source, a copy
+  that cannot be taken still lets the cookies through, since the cookies are the
+  login and the rest is comfort. The general rule: a file written by a running
+  process is a cache of its state, not its state.
+  What this deliberately does *not* do is make a cookie outlive what the site
+  said: a cookie with no expiry dies when the browser closes, so it crosses to a
+  borrowing session — it is read out of memory, where it lives — and does not
+  survive to the next run. Saving those ourselves and putting them back would
+  keep the promise of "remember the browser" on such sites, at the price of
+  telling the site something untrue about its own session. Not a gap to close:
+  a decision, and the site's to make.
 
 ### Things a test cannot pin down
 
@@ -476,3 +542,7 @@ Notes specific to that host:
 - Next.js `output: standalone` is gated behind `NEXT_STANDALONE=1` because creating
   symlinks fails for an unprivileged user on Windows.
 - `.env` on the host holds generated secrets and is never committed.
+- The `profiles` volume holds one Chromium profile per workflow that asked to be
+  remembered, which is tens of megabytes each and grows with what the site stores.
+  On an SD card that matters: `PROFILE_RETENTION_DAYS` defaults to 60, and a
+  profile whose workflow was deleted goes at the next sweep whatever it says.

@@ -238,6 +238,12 @@ export async function runExecution(
     session = await sessions.create({
       sessionId: input.executionId,
       userId: input.userId,
+      // The workflow's own browser, with whatever the last session left in it: a
+      // login done by hand while recording is still there at three in the morning.
+      // Only when the workflow asked for it: a workflow whose steps *are* the
+      // login must meet the site as a stranger every time, or the second run
+      // lands on a page that has nothing to fill.
+      workflowId: workflow.rememberBrowser ? input.workflowId : null,
       startUrl: firstUrl(steps) ?? workflow.startUrl,
       timeoutMs: config.sessionTimeoutMs,
       // Nothing polls an execution's session from outside, so it must never be
@@ -312,7 +318,30 @@ export async function runExecution(
       try {
         await executeStep(step, ctx);
       } catch (err) {
-        const message = safe((err as Error).message);
+        let message = safe((err as Error).message);
+        /*
+         * A remembered browser has one failure mode worth naming out loud, and it
+         * looks like a broken selector: the page the run lands on is not the page
+         * it was recorded against, because the site either recognises the visitor
+         * from the last run and sends it past the login, or no longer recognises it
+         * and sends it back to the login. Either way a step finds nothing.
+         *
+         * Not only the first step. A workflow recorded from after the login opens
+         * with a `goto`, which succeeds — the page exists either way — and falls
+         * over on the step after it; tying the explanation to the first step alone
+         * meant it appeared in the case that happens least.
+         *
+         * Nothing here deduces anything: the run stops exactly as it always does.
+         * This only spares the operator working out what changed.
+         */
+        if (workflow.rememberBrowser && /no element matches/i.test(message)) {
+          message +=
+            ". This workflow remembers its browser between runs, so the page it landed " +
+            "on may not be the one this step was recorded against: the site may already " +
+            "consider it signed in, or may have stopped doing so. Open this workflow's " +
+            "browser and sign in by hand, or turn remembering off if the workflow signs " +
+            "in by itself.";
+        }
         await handleFailure({
           prisma,
           notifications,

@@ -4,7 +4,7 @@ import { createLogger } from "@app/shared";
 import { loadConfig } from "./config";
 import { SessionManager } from "./session/manager";
 import { buildControlServer } from "./control-server";
-import { pruneOldHistory } from "./retention";
+import { pruneBrowserProfiles, pruneOldHistory } from "./retention";
 import {
   startQueueConsumer,
   reconcileMissedSchedules,
@@ -35,24 +35,34 @@ async function main(): Promise<void> {
     log.error({ err }, "Could not reconcile missed schedules")
   );
 
-  // History has no natural end: every run writes log lines and every failed run
-  // writes a screenshot. Pruned at startup and once a day after that.
+  // Nothing has a natural end here: every run writes log lines, every failed run
+  // writes a screenshot, and every workflow keeps a browser profile that grows
+  // with its cache. Both are swept at startup and once a day after that.
   const PRUNE_INTERVAL_MS = 24 * 60 * 60 * 1000;
-  const prune = () =>
-    pruneOldHistory({
+  const prune = async () => {
+    if (config.historyRetentionDays > 0) {
+      await pruneOldHistory({
+        prisma,
+        log,
+        artifactDir: config.artifactDir,
+        retentionDays: config.historyRetentionDays
+      }).catch((err) => log.error({ err }, "Could not prune old history"));
+    }
+    // Independent of the history setting: a profile whose workflow is gone holds
+    // the cookies of a site the user is no longer automating, and goes either way.
+    await pruneBrowserProfiles({
       prisma,
       log,
-      artifactDir: config.artifactDir,
-      retentionDays: config.historyRetentionDays
-    }).catch((err) => log.error({ err }, "Could not prune old history"));
-  let pruneTimer: NodeJS.Timeout | null = null;
-  if (config.historyRetentionDays > 0) {
-    await prune();
-    pruneTimer = setInterval(() => void prune(), PRUNE_INTERVAL_MS);
-    pruneTimer.unref();
-  } else {
+      profileDir: config.profileDir,
+      retentionDays: config.profileRetentionDays
+    }).catch((err) => log.error({ err }, "Could not prune browser profiles"));
+  };
+  if (config.historyRetentionDays === 0) {
     log.warn("History pruning is disabled (HISTORY_RETENTION_DAYS=0)");
   }
+  await prune();
+  const pruneTimer: NodeJS.Timeout | null = setInterval(() => void prune(), PRUNE_INTERVAL_MS);
+  pruneTimer.unref();
 
   let shuttingDown = false;
   const shutdown = async (signal: string) => {

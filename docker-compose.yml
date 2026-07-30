@@ -119,6 +119,11 @@ services:
       ALLOW_PRIVATE_TARGETS: ${ALLOW_PRIVATE_TARGETS:-false}
       ALLOWED_TARGET_HOSTS: ${ALLOWED_TARGET_HOSTS:-}
       ARTIFACT_DIR: /data/artifacts
+      # A workflow's browser lives here between runs, so a login done once while
+      # recording is still there at three in the morning. It is a volume because
+      # inside the container it would not survive a deploy.
+      PROFILE_DIR: /data/profiles
+      PROFILE_RETENTION_DAYS: ${PROFILE_RETENTION_DAYS:-60}
       HISTORY_RETENTION_DAYS: ${HISTORY_RETENTION_DAYS:-30}
       # Read-only directory baked into the image: an upload step can only send
       # files from here, never arbitrary paths on the worker.
@@ -128,6 +133,7 @@ services:
     shm_size: 1gb
     volumes:
       - artifacts:/data/artifacts
+      - profiles:/data/profiles
     depends_on:
       postgres:
         condition: service_healthy
@@ -176,3 +182,4 @@ volumes:
   postgres-data:
   redis-data:
   artifacts:
+  profiles:

@@ -22,7 +22,12 @@ const CreateWorkflowSchema = z.object({
 const UpdateWorkflowSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   startUrl: z.string().min(1).max(2000).optional(),
-  status: z.enum(["draft", "ready", "disabled"]).optional()
+  status: z.enum(["draft", "ready", "disabled"]).optional(),
+  /**
+   * Whether runs share one browser profile. Off by default; see the schema for
+   * why the default is the point.
+   */
+  rememberBrowser: z.boolean().optional()
 });
 
 const PutStepsSchema = z.object({

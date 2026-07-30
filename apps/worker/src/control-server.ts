@@ -12,6 +12,8 @@ const CreateSessionSchema = z.object({
   sessionId: z.string().min(1),
   userId: z.string().min(1),
   startUrl: z.string().url(),
+  /** Whose browser this session drives: the profile is kept per workflow. */
+  workflowId: z.string().min(1).optional(),
   timeoutMs: z.coerce.number().int().min(1000).optional()
 });
 

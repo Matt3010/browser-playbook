@@ -121,7 +121,13 @@ export class AppClient {
   }
 
   getWorkflow(id: string) {
-    return this.ok<{ id: string; name: string; status: string; steps: Step[] }>(
+    return this.ok<{
+      id: string;
+      name: string;
+      status: string;
+      rememberBrowser?: boolean;
+      steps: Step[];
+    }>(
       "GET",
       `/api/workflows/${id}`
     );
@@ -131,14 +137,29 @@ export class AppClient {
     return this.ok<Step[]>("PUT", `/api/workflows/${workflowId}/steps`, { steps });
   }
 
-  createSession(startUrl: string, timeoutMs?: number) {
+  /** Turns on the browser this workflow keeps between runs. */
+  rememberBrowser(workflowId: string, enabled = true) {
+    return this.ok<{ id: string; rememberBrowser: boolean }>(
+      "PATCH",
+      `/api/workflows/${workflowId}`,
+      { rememberBrowser: enabled }
+    );
+  }
+
+  createSession(startUrl: string, timeoutMs?: number, workflowId?: string) {
     return this.ok<{
       sessionId: string;
       state: string;
       token: string;
       vncPath: string;
       expiresAt?: string;
-    }>("POST", "/api/sessions", { startUrl, ...(timeoutMs ? { timeoutMs } : {}) });
+    }>("POST", "/api/sessions", {
+      startUrl,
+      ...(timeoutMs ? { timeoutMs } : {}),
+      // A session that names its workflow gets that workflow's browser, with
+      // whatever the last session left in it.
+      ...(workflowId ? { workflowId } : {})
+    });
   }
 
   getSession(sessionId: string) {

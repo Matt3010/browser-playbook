@@ -1,10 +1,10 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, mkdir, writeFile, stat } from "fs/promises";
+import { mkdtemp, mkdir, writeFile, stat, utimes } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import { PrismaClient } from "@app/database";
 import { hashPassword, createLogger } from "@app/shared";
-import { pruneOldHistory } from "../src/retention";
+import { pruneBrowserProfiles, pruneOldHistory } from "../src/retention";
 
 /**
  * Nothing ever deleted an execution log, a notification or a screenshot: they only
@@ -156,5 +156,78 @@ describe("pruning history that nobody will read again", () => {
     await pruneOldHistory({ prisma, log, artifactDir, retentionDays: 30 });
 
     expect(await exists(file), "a path outside the root must survive").toBe(true);
+  });
+});
+
+describe("pruneBrowserProfiles", () => {
+  let profileDir: string;
+
+  /** A profile directory for a workflow, last used `ageDays` ago. */
+  async function agedProfile(owner: string, workflow: string, ageDays: number) {
+    const directory = path.join(profileDir, owner, workflow);
+    await mkdir(directory, { recursive: true });
+    await writeFile(path.join(directory, "Cookies"), "cookie-jar");
+    const when = new Date(Date.now() - ageDays * DAY);
+    await utimes(directory, when, when);
+    return directory;
+  }
+
+  beforeEach(async () => {
+    profileDir = await mkdtemp(path.join(tmpdir(), "profiles-test-"));
+  });
+
+  it("keeps the profile of a workflow that is still there and still used", async () => {
+    const directory = await agedProfile(userId, workflowId, 1);
+    const result = await pruneBrowserProfiles({ prisma, log, profileDir, retentionDays: 60 });
+    expect(result).toEqual({ orphaned: 0, stale: 0 });
+    expect(await exists(directory)).toBe(true);
+  });
+
+  it("removes the profile of a workflow that no longer exists", async () => {
+    // Deleting a workflow deletes its rows, and the volume would otherwise keep
+    // its browser — with the cookies of the site it logged into — for ever.
+    const directory = await agedProfile(userId, workflowId, 1);
+    await prisma.workflow.delete({ where: { id: workflowId } });
+
+    const result = await pruneBrowserProfiles({ prisma, log, profileDir, retentionDays: 60 });
+    expect(result.orphaned).toBe(1);
+    expect(await exists(directory)).toBe(false);
+  });
+
+  it("removes a profile nothing has opened for longer than the retention", async () => {
+    const old = await agedProfile(userId, workflowId, 90);
+    const result = await pruneBrowserProfiles({ prisma, log, profileDir, retentionDays: 60 });
+    expect(result.stale).toBe(1);
+    expect(await exists(old)).toBe(false);
+  });
+
+  it("keeps every profile when the retention is disabled, except the orphans", async () => {
+    const old = await agedProfile(userId, workflowId, 500);
+    const result = await pruneBrowserProfiles({ prisma, log, profileDir, retentionDays: 0 });
+    expect(result).toEqual({ orphaned: 0, stale: 0 });
+    expect(await exists(old)).toBe(true);
+  });
+
+  it("does not touch the profile of another user with the same workflow id", async () => {
+    // The layout is <root>/<userId>/<workflowId>: a workflow id belonging to one
+    // user says nothing about a directory under another one, and that directory
+    // has no workflow of its own — so it goes as an orphan, and the real one stays.
+    const mine = await agedProfile(userId, workflowId, 1);
+    const stranger = await agedProfile("00000000-0000-4000-8000-000000000000", workflowId, 1);
+
+    const result = await pruneBrowserProfiles({ prisma, log, profileDir, retentionDays: 60 });
+    expect(result.orphaned).toBe(1);
+    expect(await exists(mine)).toBe(true);
+    expect(await exists(stranger)).toBe(false);
+  });
+
+  it("says nothing and does nothing when no profile has ever been kept", async () => {
+    const result = await pruneBrowserProfiles({
+      prisma,
+      log,
+      profileDir: path.join(profileDir, "never-created"),
+      retentionDays: 60
+    });
+    expect(result).toEqual({ orphaned: 0, stale: 0 });
   });
 });

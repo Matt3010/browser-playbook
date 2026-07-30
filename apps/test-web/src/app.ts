@@ -109,7 +109,13 @@ ${error ? `<p class="error" data-testid="login-error">${escapeHtml(error)}</p>` 
     );
   }
 
-  app.get("/login", async (_request, reply) => reply.type("text/html").send(loginPage()));
+  app.get("/login", async (request, reply) => {
+    // A visitor the site already knows is sent on, the way real sites do. It is
+    // what makes a remembered browser visible: a workflow whose steps are the
+    // login has nothing to fill on the page it lands on.
+    if (isLoggedIn(request)) return reply.redirect("/dashboard");
+    return reply.type("text/html").send(loginPage());
+  });
 
   app.post("/login", async (request, reply) => {
     const state = getState();
@@ -125,7 +131,15 @@ ${error ? `<p class="error" data-testid="login-error">${escapeHtml(error)}</p>` 
       return reply.code(401).type("text/html").send(loginPage("Credenziali errate"));
     }
     return reply
-      .setCookie(SESSION_COOKIE, randomUUID(), { path: "/", httpOnly: true })
+      // Given an expiry on purpose, the way a site with "keep me signed in" does:
+      // a cookie with no expiry lives in the browser's memory and no profile can
+      // keep it, so a workflow's browser could never inherit a login from the
+      // recording that made it.
+      .setCookie(SESSION_COOKIE, randomUUID(), {
+        path: "/",
+        httpOnly: true,
+        maxAge: 24 * 60 * 60
+      })
       .redirect("/dashboard");
   });
 
@@ -269,6 +283,31 @@ ${summary}`
       )
     );
   });
+
+  // ---- images, and the links they sit inside ------------------------------
+
+  /**
+   * What a page made of pictures looks like. An image carries its name in `alt`,
+   * and a picture inside a link is not the thing you meant to click — the link
+   * is. Neither used to be readable by the recorder, so both fell back to a
+   * structural path on exactly the pages that rearrange themselves.
+   */
+  app.get("/media", async (_request, reply) =>
+    reply.type("text/html").send(
+      page(
+        "Immagini - test-web",
+        `
+<h1>Immagini</h1>
+<img id="chart" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="Grafico delle vendite"
+     width="60" height="60" style="background:#c9ced6;display:block">
+<p><a id="tile" href="#chart"><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt="Apri il grafico"
+     width="60" height="60" style="background:#9aa3b2;display:block"></a></p>
+<p><a id="worded" href="#chart"><span>Torna in cima</span></a></p>
+<p><img id="decorative" src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" alt=""
+     width="20" height="20" style="background:#eee;display:block"></p>`
+      )
+    )
+  );
 
   // ---- an element only a structural path can name -------------------------
 

@@ -30,6 +30,13 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
   const [startUrl, setStartUrl] = useState("");
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [vncStatus, setVncStatus] = useState<VncStatus>("connecting");
+  /**
+   * The panel explaining what remembering the browser does. A switch that decides
+   * whether a workflow meets a site as a stranger cannot be a bare checkbox: the
+   * consequence is not guessable from the label, and the wrong choice on a
+   * workflow that signs in by itself breaks its second run.
+   */
+  const [rememberInfo, setRememberInfo] = useState(false);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -231,6 +238,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
         );
       }
       const created = await api.post<SessionInfo>("/sessions", { startUrl, workflowId });
+      reportedSkippedRef.current = 0;
       setSession(created);
       log(`Sessione browser ${created.sessionId} avviata (${created.state})`);
       startPolling(created.sessionId);
@@ -256,6 +264,13 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
    * dead handle: leaving it offered "Chiudi browser" for a browser that had
    * already closed, and no way back to "Avvia browser" but a reload.
    */
+  /**
+   * How many discarded actions have already been reported. The poll reads the
+   * recording every second and the count only grows, so this is what turns it
+   * back into an event.
+   */
+  const reportedSkippedRef = useRef(0);
+
   const forgetSession = useCallback(
     (why: string) => {
       if (pollRef.current) clearInterval(pollRef.current);
@@ -285,8 +300,15 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
         // the way down is what keeps that last action from being lost.
         if (info.recording || wasRecordingRef.current) {
           const recording = await pullRecording(sessionId);
-          if (recording.skipped > 0) {
-            log(`${recording.skipped} azioni scartate: selector non univoco`);
+          // News, not a state. The poll runs every second and the count does not
+          // go down, so reporting it each time buried the log under one line.
+          if (recording.skipped > reportedSkippedRef.current) {
+            const fresh = recording.skipped - reportedSkippedRef.current;
+            reportedSkippedRef.current = recording.skipped;
+            log(
+              `${fresh} ${fresh === 1 ? "azione scartata" : "azioni scartate"}: ` +
+                `selector non univoco`
+            );
           }
           // The capture is the only stop the user did not ask for, so it is the
           // only one worth reporting here; Stop reports itself.
@@ -371,6 +393,36 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
     });
   }
 
+  /**
+   * Turns remembering the browser on or off for this workflow.
+   *
+   * On, every run opens the same browser: the login or the bot check passed by
+   * hand while recording is still there at three in the morning. Off — the
+   * default — each run meets the site as a stranger, which is what a workflow
+   * whose own steps sign in needs, or the second run lands on a page that has
+   * nothing to fill.
+   *
+   * Merged into the loaded workflow rather than reloading it, for the same reason
+   * as the rename: the editor may be holding a recording that is not saved yet.
+   */
+  async function toggleRememberBrowser() {
+    if (!workflow) return;
+    await run("remember", async () => {
+      const next = !workflow.rememberBrowser;
+      const updated = await api.patch<Workflow>(`/workflows/${workflowId}`, {
+        rememberBrowser: next
+      });
+      setWorkflow((current) =>
+        current ? { ...current, rememberBrowser: updated.rememberBrowser } : current
+      );
+      log(
+        next
+          ? "Il browser di questo workflow viene ricordato fra le esecuzioni"
+          : "Ogni esecuzione riparte da un browser nuovo"
+      );
+    });
+  }
+
   /** Discards everything recorded so far, unlocking recording again. */
   async function clearRecording() {
     if (!session) return;
@@ -378,6 +430,7 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
       await api.del(`/sessions/${session.sessionId}/recording`);
       lastPulledRef.current = new Map();
       removedRef.current = new Set();
+      reportedSkippedRef.current = 0;
       setSteps([]);
       setVerifications([]);
       setDirty(true);
@@ -743,6 +796,27 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           data-testid="start-url"
           aria-label="URL iniziale"
         />
+        <label className="flex items-center gap-1 text-xs text-slate-600">
+          <input
+            type="checkbox"
+            className="h-4 w-4"
+            checked={!!workflow?.rememberBrowser}
+            onChange={toggleRememberBrowser}
+            disabled={busy !== null}
+            data-testid="remember-browser"
+          />
+          Ricorda il browser
+        </label>
+        <button
+          type="button"
+          className="flex h-5 w-5 items-center justify-center rounded-full border border-slate-300 text-xs text-slate-600 hover:bg-slate-100"
+          onClick={() => setRememberInfo(true)}
+          aria-label="Cosa significa ricordare il browser"
+          title="Cosa significa ricordare il browser"
+          data-testid="remember-browser-info"
+        >
+          ?
+        </button>
         {!session ? (
           <>
             <button className="btn" onClick={startBrowser} disabled={busy !== null} data-testid="start-browser">
@@ -1104,6 +1178,97 @@ export default function WorkflowDetailPage({ params }: { params: { id: string } 
           </ul>
         )}
       </div>
+
+      {rememberInfo ? (
+        // A modal rather than a tooltip: what this switch does takes a few
+        // sentences, and the sentence that matters is the warning.
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 p-4"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) setRememberInfo(false);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Ricorda il browser fra le esecuzioni"
+            className="max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-lg bg-white p-4 text-sm shadow-xl"
+            data-testid="remember-browser-info-panel"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setRememberInfo(false);
+            }}
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <h2 className="font-medium">Ricorda il browser fra le esecuzioni</h2>
+              <div className="flex-1" />
+              <button
+                className="btn"
+                onClick={() => setRememberInfo(false)}
+                data-testid="remember-browser-info-close"
+              >
+                Ho capito
+              </button>
+            </div>
+
+            <div className="space-y-3 text-slate-700">
+              <p>
+                Ogni esecuzione apre un browser vero. Questa impostazione decide se
+                sia <strong>lo stesso</strong> browser ogni volta o uno nuovo.
+              </p>
+
+              <div>
+                <p className="font-medium text-slate-900">Spenta (predefinito)</p>
+                <p>
+                  Ogni registrazione e ogni esecuzione partono da un browser nuovo:
+                  nessun cookie, nessuna cronologia. Il sito vede un visitatore mai
+                  visto, quindi i passi che fanno il <strong>login</strong> trovano
+                  sempre il loro form. È quello che serve alla maggior parte dei
+                  workflow, e vale anche per i cloni.
+                </p>
+              </div>
+
+              <div>
+                <p className="font-medium text-slate-900">Accesa</p>
+                <p>
+                  Registrazione ed esecuzioni condividono un browser che resta:
+                  quello che passi <strong>tu a mano</strong> mentre registri — un
+                  login, la verifica &quot;non sono un robot&quot; — la notte dopo è
+                  ancora lì. Serve ai siti che sfidano un visitatore sconosciuto,
+                  dove un browser nuovo ogni volta viene fermato ogni volta.
+                </p>
+              </div>
+
+              <div className="rounded-md bg-amber-50 px-3 py-2 text-amber-900">
+                <p className="font-medium">Se il workflow fa il login da sé, lasciala spenta.</p>
+                <p>
+                  Alla seconda esecuzione il sito potrebbe considerarti già
+                  autenticato e portarti oltre la pagina di accesso: i passi che
+                  compilano email e password non troverebbero i loro campi, e il
+                  workflow si fermerebbe lì.
+                </p>
+              </div>
+
+              <div>
+                <p className="font-medium text-slate-900">Cosa resta, e cosa no</p>
+                <p>
+                  Restano i cookie con una scadenza (quelli del &quot;ricordami&quot;),
+                  il localStorage e le preferenze. Non resta un cookie di sessione
+                  senza scadenza: quello vive nella memoria del browser e nessun
+                  profilo lo conserva. Un clone eredita l&apos;impostazione ma non i
+                  cookie: ha un browser suo, e la prima volta è uno sconosciuto.
+                </p>
+              </div>
+
+              <p className="text-xs text-slate-500">
+                Il browser è tuo e resta sul server: puoi svuotarlo in qualunque
+                momento spegnendo l&apos;impostazione. Non garantisce di superare un
+                controllo anti-robot — se il sito decide di fermarsi, il workflow si
+                ferma invece di far finta di aver agito.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

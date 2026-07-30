@@ -499,6 +499,51 @@ test.describe("visual step editor", () => {
     ]);
   });
 
+  test("remembering the browser is off until the page turns it on", async ({ page }) => {
+    // The default matters more than the switch: a workflow whose own steps sign in
+    // must meet the site as a stranger every run, or the second one lands where
+    // there is nothing to fill. So it starts off, and stays off unless asked.
+    const remember = page.getByTestId("remember-browser");
+    await expect(remember).not.toBeChecked();
+
+    // Clicked rather than `check()`ed: the box shows what the *workflow* holds, so
+    // it ticks when the server has answered, not on the click itself.
+    await remember.click();
+    await expect(remember).toBeChecked({ timeout: 30_000 });
+    await expect(page.getByTestId("live-log")).toContainText("ricordato", { timeout: 30_000 });
+
+    // And it is the workflow that remembers, not the page: it survives a reload.
+    await page.reload();
+    await expect(page.getByTestId("remember-browser")).toBeChecked();
+    expect((await client.getWorkflow(workflowId)).rememberBrowser).toBe(true);
+
+    await page.getByTestId("remember-browser").click();
+    await expect(page.getByTestId("remember-browser")).not.toBeChecked({ timeout: 30_000 });
+    await expect(page.getByTestId("live-log")).toContainText("browser nuovo", { timeout: 30_000 });
+  });
+
+  test("explains what remembering the browser does, before it is turned on", async ({ page }) => {
+    // A switch that changes when a workflow meets a site as a stranger cannot be a
+    // bare checkbox: what it does is not guessable from its label, and getting it
+    // wrong on a workflow that signs in by itself breaks the second run.
+    await expect(page.getByTestId("remember-browser-info-panel")).toBeHidden();
+
+    await page.getByTestId("remember-browser-info").click();
+    const panel = page.getByTestId("remember-browser-info-panel");
+    await expect(panel).toBeVisible();
+
+    // The two states, and the trap, in the user's language.
+    await expect(panel).toContainText("Spenta");
+    await expect(panel).toContainText("Accesa");
+    await expect(panel).toContainText("login");
+
+    // Reading about it must not turn it on.
+    await expect(page.getByTestId("remember-browser")).not.toBeChecked();
+
+    await page.getByTestId("remember-browser-info-close").click();
+    await expect(panel).toBeHidden();
+  });
+
   test("runs the whole workflow from the editor", async ({ page }) => {
     await page.getByTestId("run-now").click();
     await expect(page.getByTestId("execution-detail")).toBeVisible({ timeout: 30_000 });

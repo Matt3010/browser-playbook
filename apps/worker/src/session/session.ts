@@ -1,8 +1,8 @@
 import { randomUUID } from "crypto";
-import { mkdtemp, rm } from "fs/promises";
+import { mkdir, mkdtemp, rm } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
-import { chromium, type BrowserContext, type Page } from "playwright";
+import { chromium, type BrowserContext, type Cookie, type Page } from "playwright";
 import {
   actionsToSteps,
   actionToStep,
@@ -36,6 +36,20 @@ export interface SessionOptions {
   sessionId: string;
   userId: string;
   startUrl: string;
+  /**
+   * The directory holding this session's browser. For a workflow it is the kept
+   * profile; for a session with no workflow, or one that had to copy a profile
+   * already in use, it is null or a throwaway.
+   */
+  profileDir?: string | null;
+  /** False for a copy or a throwaway: those are deleted when the session ends. */
+  keepProfile?: boolean;
+  /**
+   * Cookies to install before the first navigation, for a session that had to
+   * borrow the state of a browser already open on its profile. They come from
+   * that browser rather than from its files; see session/profile.ts.
+   */
+  seedCookies?: Cookie[];
   timeoutMs: number;
   /**
    * When set, the session closes itself after this long without being touched by
@@ -103,6 +117,8 @@ export class BrowserSession {
   private readonly log: Logger;
   private readonly processes: ManagedProcess[] = [];
   private profileDir: string | null = null;
+  /** A kept profile is never deleted at the end: that is the whole point of it. */
+  private persistentProfile = false;
   private context: BrowserContext | null = null;
   private readonly pages: TrackedPage[] = [];
   private activePageId = "main";
@@ -213,7 +229,17 @@ export class BrowserSession {
   }
 
   private async startBrowser(): Promise<void> {
-    this.profileDir = await mkdtemp(path.join(tmpdir(), `session-${this.sessionId}-`));
+    // A workflow's browser is kept; a session that belongs to no workflow gets a
+    // throwaway one, which is what every session used to get.
+    if (this.options.profileDir) {
+      this.profileDir = this.options.profileDir;
+      this.persistentProfile = this.options.keepProfile !== false;
+      await mkdir(this.profileDir, { recursive: true });
+      this.log.info({ profileDir: this.profileDir }, "Using the browser profile of the workflow");
+    } else {
+      this.profileDir = await mkdtemp(path.join(tmpdir(), `session-${this.sessionId}-`));
+      this.persistentProfile = false;
+    }
 
     this.context = await chromium.launchPersistentContext(this.profileDir, {
       headless: false,
@@ -222,6 +248,11 @@ export class BrowserSession {
       env: { ...process.env, DISPLAY: `:${this.slot.display}` },
       args: [
         "--no-sandbox",
+        // Chromium started by an automation driver reports itself in
+        // `navigator.webdriver`, which is the first thing a bot check reads. This
+        // browser is the user's own, driven from another window; saying otherwise
+        // makes a site refuse a person for being a person.
+        "--disable-blink-features=AutomationControlled",
         "--disable-dev-shm-usage",
         "--disable-gpu",
         "--no-first-run",
@@ -233,6 +264,19 @@ export class BrowserSession {
         "--window-position=0,0"
       ]
     });
+
+    // Before anything is navigated to: the point of these is that the very first
+    // request already carries the login. A cookie that cannot be installed must
+    // not take the others with it, so they go in one by one — and none of it is
+    // fatal, because the run then meets the site as a stranger and stops on the
+    // step that finds nothing, which is a legible failure.
+    for (const cookie of this.options.seedCookies ?? []) {
+      try {
+        await this.context.addCookies([cookie]);
+      } catch (err) {
+        this.log.warn({ err, cookie: cookie.name }, "Could not install a borrowed cookie");
+      }
+    }
 
     await this.context.exposeBinding("__recorderEmit", (_source, payload) => {
       this.handleEmittedAction(payload as Record<string, unknown>, _source.page);
@@ -303,7 +347,7 @@ export class BrowserSession {
     }
     this.processes.length = 0;
 
-    if (this.profileDir) {
+    if (this.profileDir && !this.persistentProfile) {
       try {
         await rm(this.profileDir, { recursive: true, force: true, maxRetries: 3 });
       } catch (err) {
@@ -315,6 +359,24 @@ export class BrowserSession {
     if (this.state !== "error") this.state = "closed";
     this.log.info("Browser session closed");
     this.options.onClosed(this.sessionId);
+  }
+
+  /**
+   * The cookies this browser holds right now, or null when it cannot say.
+   *
+   * Asked by a session that wants this one's profile while it is open. It is the
+   * browser that is asked, not its directory, because the directory is behind:
+   * Chromium commits the cookie store lazily, and a cookie with no expiry is
+   * never written at all. Reading them changes nothing here.
+   */
+  async exportCookies(): Promise<Cookie[] | null> {
+    if (!this.context || this.closing) return null;
+    try {
+      return await this.context.cookies();
+    } catch (err) {
+      this.log.warn({ err }, "Could not read the cookies of this session");
+      return null;
+    }
   }
 
   // ---- page tracking ------------------------------------------------------

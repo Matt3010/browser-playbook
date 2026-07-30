@@ -54,6 +54,9 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     const type = (el.getAttribute("type") || "").toLowerCase();
     if (tag === "button") return "button";
     if (tag === "a") return el.hasAttribute("href") ? "link" : null;
+    // An image is in the accessibility tree only while it has a name: `alt=""`
+    // says "decorative", and calling it an image anyway would name nothing.
+    if (tag === "img") return (el.getAttribute("alt") || "").trim() ? "img" : null;
     if (tag === "select") return el.hasAttribute("multiple") ? "listbox" : "combobox";
     if (tag === "textarea") return "textbox";
     if (tag === "input") {
@@ -98,6 +101,14 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
       if (child.getAttribute("aria-hidden") === "true") continue;
       const tag = tagOf(child);
       if (tag === "script" || tag === "style") continue;
+      // An image contributes its alt: that is how the accessibility tree names a
+      // link made of a picture, and without it such a link has no name at all and
+      // can only be reached by a path down the document.
+      if (tag === "img") {
+        const alt = (child.getAttribute("alt") || "").trim();
+        if (alt) out += " " + alt;
+        continue;
+      }
       out += " " + accessibleTextOf(child);
     }
     return out.replace(/\s+/g, " ").trim();
@@ -149,6 +160,10 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     if (tag === "input" && (type === "submit" || type === "button" || type === "reset")) {
       const value = (el as HTMLInputElement).value;
       if (value) return value.trim();
+    }
+    if (tag === "img") {
+      const alt = (el.getAttribute("alt") || "").trim();
+      if (alt) return alt;
     }
     if (tag === "button" || tag === "a" || el.getAttribute("role") === "button") {
       const text = accessibleTextOf(el);
@@ -286,6 +301,42 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
     }
   }
 
+  /**
+   * What a click actually meant.
+   *
+   * A link or a button is often built out of a picture and a few spans, and the
+   * pointer lands on one of those. The span has no name, so the only way left to
+   * name it is a path down the document — the most fragile selector there is, on
+   * exactly the sites that rearrange themselves. What the person meant is the
+   * link, and the link has a name.
+   *
+   * Only upwards, only through elements that cannot be clicked for their own
+   * sake, and only a few levels: a whole card wrapped in a link should not turn
+   * every click inside it into the same step.
+   */
+  function clickTargetOf(el: Element): Element {
+    const own = tagOf(el);
+    if (own === "a" || own === "button" || own === "input" || own === "select" || own === "textarea") {
+      return el;
+    }
+    const explicitRole = el.getAttribute("role");
+    if (explicitRole === "button" || explicitRole === "link") return el;
+
+    let current: Element | null = el.parentElement;
+    for (let depth = 0; current && depth < 3; depth += 1) {
+      const tag = tagOf(current);
+      const role = current.getAttribute("role");
+      const interactive =
+        (tag === "a" && current.hasAttribute("href")) ||
+        tag === "button" ||
+        role === "button" ||
+        role === "link";
+      if (interactive) return accessibleName(current) ? current : el;
+      current = current.parentElement;
+    }
+    return el;
+  }
+
   function describe(el: Element): Record<string, any> {
     const role = roleOf(el);
     const name = accessibleName(el);
@@ -376,7 +427,9 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
   }
 
   function showTooltip(el: Element, x: number, y: number): void {
-    const info = describe(el);
+    // The same promotion the recorder applies, or the panel would promise a
+    // selector for the picture while the step stores one for the link.
+    const info = describe(clickTargetOf(el));
     const tooltip = ensureTooltip();
     const disabled =
       (el as HTMLInputElement).disabled === true || el.getAttribute("aria-disabled") === "true";
@@ -514,13 +567,13 @@ export function recorderBrowserScript(arg: RecorderScriptArg): void {
       if (state.armedFinal) {
         swallow(event);
         state.armedFinal = false;
-        emit({ kind: "click", element: describe(el), isFinal: true });
+        emit({ kind: "click", element: describe(clickTargetOf(el)), isFinal: true });
         return;
       }
 
       // The change handler reports these, so one interaction never yields two steps.
       if (togglesAChoiceControl(el)) return;
-      emit({ kind: "click", element: describe(el) });
+      emit({ kind: "click", element: describe(clickTargetOf(el)) });
     },
     true
   );

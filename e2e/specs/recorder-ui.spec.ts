@@ -163,6 +163,39 @@ test.describe("the recorder page keeps the editor in step with the worker", () =
     await expect(outputs).toContainText("falso");
   });
 
+  test("says once that an action was skipped, not once a second", async ({ page }) => {
+    // The live log is written by the poll, which runs every second and read the
+    // skipped count as news every time: one discarded action produced the same
+    // line for as long as the session stayed open, burying everything else.
+    await loginThroughUi(page);
+    const workflow = await client.createWorkflow(
+      `Scartate ${Date.now()}`,
+      `${TEST_WEB_INTERNAL_URL}/login`
+    );
+    const sessionId = await startSession(page, workflow.id);
+
+    await page.getByTestId("record").click();
+    await expect(page.getByTestId("recording-state")).toContainText("attiva");
+
+    // Reading a password field is refused at capture: a secret must not come back
+    // as a stored result. That refusal is a skipped action, deterministically.
+    await page.getByTestId("arm-read").click();
+    await expect(page.getByTestId("arm-read")).toContainText("Armata");
+    await client.interact(sessionId, { kind: "click", selector: "#password" });
+
+    const occurrences = async () =>
+      ((await page.getByTestId("live-log").innerText()).match(/azion[ei] scartat[ae]/g) ?? [])
+        .length;
+
+    await expect.poll(occurrences, { timeout: 30_000 }).toBe(1);
+
+    // Four polls' worth: if the line is going to repeat, it repeats here.
+    await page.waitForTimeout(4500);
+    expect(await occurrences(), "the same news must not be reported every second").toBe(1);
+
+    await page.getByTestId("close-session").click();
+  });
+
   test("changing the start URL does not throw away unsaved steps", async ({ page }) => {
     // Steps that are not saved yet exist only in the editor. Starting the browser
     // after changing the start URL reloaded the workflow to pick up the new URL,

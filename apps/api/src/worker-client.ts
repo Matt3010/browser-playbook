@@ -74,6 +74,7 @@ export class WorkerClient {
     sessionId: string;
     userId: string;
     startUrl: string;
+    workflowId?: string;
     timeoutMs: number;
   }): Promise<WorkerSessionInfo> {
     return this.call("POST", "/sessions", input);

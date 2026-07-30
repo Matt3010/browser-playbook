@@ -138,11 +138,13 @@ services:
       ALLOW_PRIVATE_TARGETS: "true"
       ALLOWED_TARGET_HOSTS: test-web,shop-web
       ARTIFACT_DIR: /data/artifacts
+      PROFILE_DIR: /data/profiles
       UPLOAD_FIXTURE_DIR: /opt/upload-fixtures
       LOG_LEVEL: info
     shm_size: 1gb
     volumes:
       - artifacts:/data/artifacts
+      - profiles:/data/profiles
     depends_on:
       postgres:
         condition: service_healthy
@@ -192,3 +194,4 @@ networks:
 
 volumes:
   artifacts:
+  profiles:
